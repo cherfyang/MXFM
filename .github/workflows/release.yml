@@ -1,6 +1,6 @@
 name: Release
 
-# 推送 v* 标签时,自动构建 Windows / macOS / Linux 桌面包 + Android APK,并发布到 GitHub Release
+# 推送 v* 标签时,自动构建 Windows / macOS / Linux 桌面安装包,并发布到 GitHub Release
 on:
   push:
     tags: ["v*"]
@@ -50,46 +50,9 @@ jobs:
           path: ${{ matrix.glob }}
           if-no-files-found: error
 
-  android:
-    name: Android APK
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-
-      - name: 安装依赖
-        run: npm ci
-
-      - name: 构建渲染层并同步到 Android
-        run: |
-          npm run build
-          npx cap sync android
-
-      - name: 构建 Debug APK
-        run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-
-      - name: 上传 APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
   release:
     name: 发布到 GitHub Release
-    needs: [desktop, android]
+    needs: [desktop]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -107,4 +70,3 @@ jobs:
             artifacts/*.exe
             artifacts/*.dmg
             artifacts/*.AppImage
-            artifacts/*.apk
