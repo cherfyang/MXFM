@@ -1,0 +1,11 @@
+{
+  "appId": "com.mx.filemanager",
+  "appName": "MX文件管理器",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

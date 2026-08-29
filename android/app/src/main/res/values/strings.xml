@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MX文件管理器</string>
+    <string name="title_activity_main">MX文件管理器</string>
+    <string name="package_name">com.mx.filemanager</string>
+    <string name="custom_url_scheme">com.mx.filemanager</string>
+</resources>

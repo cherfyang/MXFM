@@ -1,0 +1,18 @@
+node_modules
+dist
+release
+release2
+release/*.old
+*.local
+.DS_Store
+/capacitor.config.ts
+
+# Android
+android/.gradle
+android/build
+android/app/build
+android/local.properties
+android/.idea
+android/*.iml
+android/app/*.iml
+android/capacitor-cordova-android-plugins
