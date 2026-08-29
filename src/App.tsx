@@ -35,6 +35,26 @@ export default function App() {
     document.documentElement.classList.toggle('dark', meta.dark)
   }, [st.theme])
 
+  // 窗口标题跟随当前目录(桌面版)
+  useEffect(() => {
+    const cur = s.tabs.find((t) => t.id === s.activeId)
+    const path = cur?.history[cur.idx]
+    const name = path ? path.split('/').filter(Boolean).pop() : ''
+    document.title = name ? `${decodeURIComponent(name)} - MX 文件管理器` : 'MX 文件管理器'
+  }, [s.activeId, s.tabs])
+
+  // 应用菜单动作(桌面版)
+  useEffect(() => {
+    const api = (window as unknown as { mxAPI?: { onMenuAction(cb: (action: string) => void): void } }).mxAPI
+    if (!api?.onMenuAction) return
+    api.onMenuAction((action) => {
+      const s2 = useFs.getState()
+      if (action === 'newFolder') s2.createEntry('folder')
+      else if (action === 'newFile') s2.createEntry('file')
+      else if (action === 'refresh') void s2.refresh()
+    })
+  }, [])
+
   // 有未保存修改时关闭页面前提示
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {

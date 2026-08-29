@@ -1,5 +1,6 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, protocol, net } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, dialog, protocol, net, Menu, nativeImage } = require('electron')
 const path = require('node:path')
+const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
@@ -11,15 +12,28 @@ protocol.registerSchemesAsPrivileged([
 
 let win = null
 
+// ---------- 窗口大小位置记忆 ----------
+function loadWindowState() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'window-state.json'), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
 function createWindow() {
+  const saved = loadWindowState()
   win = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    x: saved?.x,
+    y: saved?.y,
+    width: saved?.width ?? 1440,
+    height: saved?.height ?? 900,
     minWidth: 960,
     minHeight: 600,
     backgroundColor: '#17181b',
     autoHideMenuBar: true,
     title: 'MX 文件管理器',
+    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -27,6 +41,7 @@ function createWindow() {
       sandbox: false,
     },
   })
+  if (saved?.maximized) win.maximize()
   if (app.isPackaged) {
     win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   } else {
@@ -35,9 +50,55 @@ function createWindow() {
       win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
     })
   }
+  // 关闭时保存窗口状态(最大化只记标记,不记坐标)
+  win.on('close', () => {
+    if (!win) return
+    const state = win.isMaximized() || win.isFullScreen() ? { maximized: true } : { ...win.getBounds(), maximized: false }
+    try {
+      fs.writeFileSync(path.join(app.getPath('userData'), 'window-state.json'), JSON.stringify(state))
+    } catch {
+      /* ignore */
+    }
+  })
   win.on('closed', () => {
     win = null
   })
+}
+
+// ---------- 应用菜单(中文;mac 依赖 editMenu 提供剪贴板快捷键) ----------
+function sendAction(action) {
+  if (win) win.webContents.send('menu-action', action)
+}
+
+function buildMenu() {
+  const isMac = process.platform === 'darwin'
+  const template = [
+    ...(isMac
+      ? [{ label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'quit', label: '退出 MX 文件管理器' }] }]
+      : []),
+    {
+      label: '文件',
+      submenu: [
+        { label: '新建文件夹', accelerator: 'CmdOrCtrl+Shift+N', click: () => sendAction('newFolder') },
+        { label: '新建文本文档', accelerator: 'CmdOrCtrl+N', click: () => sendAction('newFile') },
+        { type: 'separator' },
+        { label: '刷新', accelerator: 'F5', click: () => sendAction('refresh') },
+        ...(isMac ? [] : [{ type: 'separator' }, { label: '退出', role: 'quit' }]),
+      ],
+    },
+    { role: 'editMenu', label: '编辑' },
+    {
+      label: '查看',
+      submenu: [
+        { role: 'togglefullscreen', label: '全屏' },
+        ...(app.isPackaged ? [] : [{ role: 'toggleDevTools', label: '开发者工具' }]),
+      ],
+    },
+    isMac
+      ? { role: 'windowMenu', label: '窗口' }
+      : { label: '窗口', submenu: [{ role: 'minimize', label: '最小化' }, { role: 'close', label: '关闭' }] },
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
 // ---------- 系统信息 ----------
@@ -211,6 +272,10 @@ ipcMain.handle('sys:memory', () => {
 
 // ---------- 本地文件流协议 ----------
 app.whenReady().then(() => {
+  buildMenu()
+  if (process.platform === 'darwin') {
+    app.setAboutPanelOptions({ applicationName: 'MX 文件管理器', applicationVersion: app.getVersion(), credits: '点击文件直接预览、编辑、播放' })
+  }
   protocol.handle('mxfile', (request) => {
     try {
       const u = new URL(request.url)

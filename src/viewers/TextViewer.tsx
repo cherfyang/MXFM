@@ -111,9 +111,19 @@ export function useCodeEditor(opts: {
         state: EditorState.create({ doc, extensions }),
         parent: hostRef.current,
       })
+      // 编辑器内 Esc 退出查看器(CM 自己处理的 Esc 已 preventDefault,此处跳过)
+      const onEsc = (e: KeyboardEvent) => {
+        if (e.key !== 'Escape' || e.defaultPrevented) return
+        e.stopPropagation()
+        useFs.getState().requestCloseView()
+      }
+      hostRef.current?.addEventListener('keydown', onEsc)
+      const offEsc = () => hostRef.current?.removeEventListener('keydown', onEsc)
+      ;(view as unknown as { __offEsc: () => void }).__offEsc = offEsc
     })()
     return () => {
       cancelled = true
+      ;(view as unknown as { __offEsc?: () => void }).__offEsc?.()
       view?.destroy()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

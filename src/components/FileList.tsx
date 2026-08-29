@@ -223,6 +223,10 @@ export function FileList() {
         }
       }
       const files = Array.from(dt.files)
+      if (!files.length && s.provider?.kind === 'native') {
+        useUi.getState().toast('文件夹请通过侧边栏「添加文件夹」添加为位置', 'info')
+        return
+      }
       if (files.length && s.provider) {
         let n = 0
         for (const f of files) {

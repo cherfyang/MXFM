@@ -14,4 +14,5 @@ contextBridge.exposeInMainWorld('mxAPI', {
   reveal: (p) => ipcRenderer.invoke('shell:reveal', p),
   openInSystem: (p) => ipcRenderer.invoke('shell:open', p),
   memory: () => ipcRenderer.invoke('sys:memory'),
+  onMenuAction: (cb) => ipcRenderer.on('menu-action', (_e, action) => cb(action)),
 })

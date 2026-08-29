@@ -1,7 +1,7 @@
 {
   "name": "mx-file-manager",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "main": "electron/main.cjs",
   "author": "mengx",
@@ -20,7 +20,8 @@
     },
     "files": [
       "dist/**/*",
-      "electron/**/*"
+      "electron/**/*",
+      "build/**/*"
     ],
     "win": {
       "target": [
@@ -30,7 +31,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": true,
@@ -39,6 +41,12 @@
       "createStartMenuShortcut": true,
       "shortcutName": "MX文件管理器",
       "artifactName": "MXFileManager-Setup-${version}.exe"
+    },
+    "mac": {
+      "icon": "build/icon.icns"
+    },
+    "linux": {
+      "icon": "build/icon-512.png"
     }
   },
   "devDependencies": {

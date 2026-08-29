@@ -729,6 +729,14 @@ export const useFs = create<FsState>()((set, get) => {
       if (!sel.length) return
       const entries = (s.listings[tab.id]?.entries ?? []).filter((e) => sel.includes(e.path))
       if (!entries.length) return
+      // 桌面版删除进回收站/废纸篓,文案如实
+      const plat = (s.provider as unknown as { platform?: string } | null)?.platform
+      const tail =
+        s.provider?.kind === 'native'
+          ? plat === 'darwin'
+            ? '文件将被移到废纸篓。'
+            : '文件将被移入回收站。'
+          : '此操作无法撤销。'
       const doDelete = () => {
         ui().closeDialog()
         void get().deletePaths(
@@ -740,7 +748,7 @@ export const useFs = create<FsState>()((set, get) => {
         ui().showDialog({
           type: 'confirm',
           title: '删除项目',
-          message: `确定要删除「${entries[0].name}」吗?此操作无法撤销。`,
+          message: `确定要删除「${entries[0].name}」吗?${tail}`,
           danger: true,
           okText: '删除',
           onOk: doDelete,
@@ -749,7 +757,7 @@ export const useFs = create<FsState>()((set, get) => {
         ui().showDialog({
           type: 'confirm',
           title: '删除多个项目',
-          message: `确定要删除选中的 ${entries.length} 个项目吗?此操作无法撤销。`,
+          message: `确定要删除选中的 ${entries.length} 个项目吗?${tail}`,
           danger: true,
           okText: '全部删除',
           onOk: doDelete,
@@ -858,6 +866,8 @@ export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
   const s = useFs.getState()
   const items: MenuItem[] = []
   const single = sel.length === 1
+  const plat = (s.provider as unknown as { platform?: string } | null)?.platform
+  const isNative = s.provider?.kind === 'native'
   if (single && sel[0].kind === 'directory') {
     items.push({ label: '打开', onClick: () => s.openEntry(sel[0]) })
     items.push({ label: '在新标签页打开', onClick: () => s.newTab(sel[0].path) })
@@ -872,6 +882,25 @@ export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
     disabled: !sel.length,
     onClick: () => s.deleteSelection(),
   })
+  if (isNative && single) {
+    items.push({ sep: true })
+    items.push({
+      label: plat === 'darwin' ? '在 Finder 中显示' : '在资源管理器中显示',
+      onClick: () => {
+        const p = s.provider as unknown as { reveal(p: string): Promise<void> }
+        p.reveal(sel[0].path).catch((e) => useUi.getState().toast(String(e.message || e), 'error'))
+      },
+    })
+    if (sel[0].kind === 'file') {
+      items.push({
+        label: '用系统默认程序打开',
+        onClick: () => {
+          const p = s.provider as unknown as { openInSystem(p: string): Promise<void> }
+          p.openInSystem(sel[0].path).catch((e) => useUi.getState().toast(String(e.message || e), 'error'))
+        },
+      })
+    }
+  }
   return items
 }
 

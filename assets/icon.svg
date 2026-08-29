@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4c8dff"/>
+      <stop offset="1" stop-color="#2456d6"/>
+    </linearGradient>
+    <linearGradient id="folder" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dbe7ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
+  <path d="M256 352h150l56 56h306a44 44 0 0 1 44 44v264a44 44 0 0 1-44 44H256a44 44 0 0 1-44-44V396a44 44 0 0 1 44-44z" fill="url(#folder)"/>
+  <path d="M212 468h600v40H212z" fill="#b9cf7a00"/>
+  <path d="M256 470h512a44 44 0 0 1 44 44v202a44 44 0 0 1-44 44H256a44 44 0 0 1-44-44V514a44 44 0 0 1 44-44z" fill="#e8f0ff"/>
+  <text x="512" y="640" text-anchor="middle" font-family="Segoe UI, PingFang SC, sans-serif" font-size="150" font-weight="700" fill="#2456d6">MX</text>
+</svg>
