@@ -19,80 +19,97 @@ import {
   MousePointerClick,
   Check,
   Gauge,
+  X,
 } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { useSettings, THEMES } from '../stores/settings'
 import { useUi, type MenuItem } from '../stores/ui'
 import { segments } from '../utils/path'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { getDragPayload } from './dnd'
 import { IconBtn } from './ui'
 
 export function Toolbar() {
   const s = useFs()
   const st = useSettings()
+  const isMobile = useIsMobile()
   const tab = s.tabs.find((t) => t.id === s.activeId)
   const path = tab?.history[tab.idx] ?? ''
   const viewOpen = !!tab?.view
+  const [searchOpen, setSearchOpen] = useState(false)
 
   return (
-    <header className="flex h-11 shrink-0 items-center gap-1 border-b border-brd bg-panel px-2">
-      <IconBtn title="侧边栏" active={st.sidebarVisible} onClick={() => st.toggle('sidebarVisible')}>
-        <PanelLeft className="h-4.5 w-4.5" />
-      </IconBtn>
-      <IconBtn title="后退 (Alt+←)" disabled={!tab || tab.idx === 0} onClick={() => s.goBack()}>
-        <ArrowLeft className="h-4.5 w-4.5" />
-      </IconBtn>
-      <IconBtn
-        title="前进 (Alt+→)"
-        disabled={!tab || tab.idx >= tab.history.length - 1}
-        onClick={() => s.goForward()}
-      >
-        <ArrowRight className="h-4.5 w-4.5" />
-      </IconBtn>
-      <IconBtn title="上一级 (Backspace)" disabled={!path || segments(path).length <= 1} onClick={() => s.goUp()}>
-        <ArrowUp className="h-4.5 w-4.5" />
-      </IconBtn>
-      <IconBtn title="刷新 (F5)" disabled={!path} onClick={() => void s.refresh()}>
-        <RefreshCw className="h-4.5 w-4.5" />
-      </IconBtn>
+    <header className="shrink-0 border-b border-brd bg-panel">
+      <div className="flex h-12 items-center gap-1 px-2 md:h-11">
+        <IconBtn title="侧边栏" active={st.sidebarVisible} onClick={() => st.toggle('sidebarVisible')}>
+          <PanelLeft className="h-5 w-5 md:h-4.5 md:w-4.5" />
+        </IconBtn>
+        <IconBtn title="后退 (Alt+←)" disabled={!tab || tab.idx === 0} onClick={() => s.goBack()}>
+          <ArrowLeft className="h-5 w-5 md:h-4.5 md:w-4.5" />
+        </IconBtn>
+        {!isMobile && (
+          <>
+            <IconBtn
+              title="前进 (Alt+→)"
+              disabled={!tab || tab.idx >= tab.history.length - 1}
+              onClick={() => s.goForward()}
+            >
+              <ArrowRight className="h-4.5 w-4.5" />
+            </IconBtn>
+            <IconBtn title="上一级 (Backspace)" disabled={!path || segments(path).length <= 1} onClick={() => s.goUp()}>
+              <ArrowUp className="h-4.5 w-4.5" />
+            </IconBtn>
+            <IconBtn title="刷新 (F5)" disabled={!path} onClick={() => void s.refresh()}>
+              <RefreshCw className="h-4.5 w-4.5" />
+            </IconBtn>
+          </>
+        )}
 
-      {viewOpen ? (
-        <div className="mx-2 flex min-w-0 flex-1 items-center gap-2 text-sm">
-          <span className="rounded bg-panel2 px-1.5 py-0.5 text-[11px] text-acc">查看器</span>
-          <span className="truncate text-txt2">{tab!.view!.entry.path}</span>
-        </div>
-      ) : (
-        <Breadcrumb path={path} />
-      )}
+        {viewOpen ? (
+          <div className="mx-2 flex min-w-0 flex-1 items-center gap-2 text-sm">
+            <span className="rounded bg-panel2 px-1.5 py-0.5 text-[11px] text-acc">查看器</span>
+            <span className="truncate text-txt2">{tab!.view!.entry.path}</span>
+          </div>
+        ) : (
+          <Breadcrumb path={path} />
+        )}
 
-      <SearchBox />
+        {isMobile ? (
+          <IconBtn title="搜索" active={searchOpen} onClick={() => setSearchOpen((v) => !v)}>
+            {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
+          </IconBtn>
+        ) : (
+          <SearchBox />
+        )}
 
-      <IconBtn
-        title="新建文件夹"
-        disabled={!path || viewOpen}
-        onClick={() => s.createEntry('folder')}
-      >
-        <FolderPlus className="h-4.5 w-4.5" />
-      </IconBtn>
-      <IconBtn title="新建文件" disabled={!path || viewOpen} onClick={() => s.createEntry('file')}>
-        <FilePlus className="h-4.5 w-4.5" />
-      </IconBtn>
-      <IconBtn
-        title={st.viewMode === 'details' ? '切换到大图标' : '切换到详细列表'}
-        disabled={!path}
-        onClick={() => st.toggle('viewMode')}
-      >
-        {st.viewMode === 'details' ? <LayoutGrid className="h-4.5 w-4.5" /> : <List className="h-4.5 w-4.5" />}
-      </IconBtn>
-      <IconBtn title="预览面板 (空格)" active={st.previewVisible} onClick={() => st.toggle('previewVisible')}>
-        <PanelRight className="h-4.5 w-4.5" />
-      </IconBtn>
-      <MoreMenu />
+        {!isMobile && (
+          <>
+            <IconBtn title="新建文件夹" disabled={!path || viewOpen} onClick={() => s.createEntry('folder')}>
+              <FolderPlus className="h-4.5 w-4.5" />
+            </IconBtn>
+            <IconBtn title="新建文件" disabled={!path || viewOpen} onClick={() => s.createEntry('file')}>
+              <FilePlus className="h-4.5 w-4.5" />
+            </IconBtn>
+            <IconBtn
+              title={st.viewMode === 'details' ? '切换到大图标' : '切换到详细列表'}
+              disabled={!path}
+              onClick={() => st.toggle('viewMode')}
+            >
+              {st.viewMode === 'details' ? <LayoutGrid className="h-4.5 w-4.5" /> : <List className="h-4.5 w-4.5" />}
+            </IconBtn>
+            <IconBtn title="预览面板 (空格)" active={st.previewVisible} onClick={() => st.toggle('previewVisible')}>
+              <PanelRight className="h-4.5 w-4.5" />
+            </IconBtn>
+          </>
+        )}
+        <MoreMenu />
+      </div>
+      {isMobile && searchOpen && <SearchBox mobile />}
     </header>
   )
 }
 
-function SearchBox() {
+function SearchBox({ mobile }: { mobile?: boolean }) {
   const s = useFs()
   const tab = s.tabs.find((t) => t.id === s.activeId)
   const filter = tab?.filter ?? ''
@@ -102,38 +119,50 @@ function SearchBox() {
     setText(filter)
   }, [filter, tab?.id])
 
+  const input = (
+    <input
+      id={mobile ? undefined : 'mx-search'}
+      value={text}
+      placeholder="搜索当前文件夹"
+      onChange={(e) => {
+        setText(e.target.value)
+        s.setFilter(e.target.value)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          setText('')
+          s.setFilter('')
+          ;(e.target as HTMLInputElement).blur()
+        }
+      }}
+      className="h-10 w-full rounded-md border border-transparent bg-panel2 pl-8 pr-2 text-[15px] outline-none placeholder:text-txt2 focus:border-acc md:h-8 md:text-[13px]"
+    />
+  )
+
+  if (mobile) {
+    return (
+      <div className="relative flex h-11 items-center border-t border-brd px-2">
+        <Search className="pointer-events-none absolute left-4 top-1/2 h-4.5 w-4.5 -translate-y-1/2 text-txt2" />
+        {input}
+      </div>
+    )
+  }
   return (
     <div className="relative mx-2 h-8 w-56 shrink-0">
       <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-txt2" />
-      <input
-        id="mx-search"
-        value={text}
-        placeholder="搜索当前文件夹 (Ctrl+F)"
-        onChange={(e) => {
-          setText(e.target.value)
-          s.setFilter(e.target.value)
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            setText('')
-            s.setFilter('')
-            ;(e.target as HTMLInputElement).blur()
-          }
-        }}
-        className="h-8 w-full rounded-md border border-transparent bg-panel2 pl-7 pr-2 text-[13px] outline-none placeholder:text-txt2 focus:border-acc"
-      />
+      {input}
     </div>
   )
 }
 
 function Breadcrumb({ path }: { path: string }) {
   const s = useFs()
+  const isMobile = useIsMobile()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(path)
   const inputRef = useRef<HTMLInputElement>(null)
-  const segs = segments(path)
-  const dragOver = useRef<HTMLDivElement>(null)
   const [dropping, setDropping] = useState(false)
+  const segs = segments(path)
 
   useEffect(() => {
     if (editing) {
@@ -160,7 +189,7 @@ function Breadcrumb({ path }: { path: string }) {
           if (e.key === 'Enter') commit()
           if (e.key === 'Escape') setEditing(false)
         }}
-        className="mx-2 h-8 min-w-0 flex-1 rounded-md border border-acc bg-panel2 px-2.5 text-[13px] outline-none"
+        className="mx-2 h-9 min-w-0 flex-1 rounded-md border border-acc bg-panel2 px-2.5 text-[14px] outline-none md:h-8 md:text-[13px]"
       />
     )
   }
@@ -170,8 +199,8 @@ function Breadcrumb({ path }: { path: string }) {
       className={`mx-1 flex min-w-0 flex-1 items-center overflow-x-auto rounded-md px-1 ${
         dropping ? 'ring-2 ring-acc' : ''
       }`}
-      onDoubleClick={() => setEditing(true)}
-      title="双击可编辑路径;拖拽文件夹到此处可移动"
+      onDoubleClick={() => !isMobile && setEditing(true)}
+      title={isMobile ? undefined : '双击可编辑路径;拖拽文件夹到此处可移动'}
       onDragOver={(e) => {
         if (getDragPayload()) {
           e.preventDefault()
@@ -195,7 +224,7 @@ function Breadcrumb({ path }: { path: string }) {
         const target = '/' + segs.slice(0, i + 1).join('/')
         return (
           <span key={target} className="flex shrink-0 items-center">
-            {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-txt2" />}
+            {i > 0 && <ChevronRight className="h-4 w-4 text-txt2 md:h-3.5 md:w-3.5" />}
             <button
               onClick={() => s.navigate(target)}
               onDragOver={(e) => {
@@ -210,11 +239,11 @@ function Breadcrumb({ path }: { path: string }) {
                 const entries = (s.listings[s.activeId]?.entries ?? []).filter((en) => payload.includes(en.path))
                 void s.moveEntries(entries, target)
               }}
-              className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[13px] hover:bg-hover ${
+              className={`flex items-center gap-1 rounded px-1.5 py-1 text-[15px] hover:bg-hover md:py-0.5 md:text-[13px] ${
                 i === segs.length - 1 ? 'font-medium text-txt' : 'text-txt2'
               }`}
             >
-              {i === 0 ? <FolderOpen className="h-3.5 w-3.5" /> : null}
+              {i === 0 ? <FolderOpen className="h-4 w-4" /> : null}
               {seg}
             </button>
           </span>
@@ -226,12 +255,24 @@ function Breadcrumb({ path }: { path: string }) {
 
 function MoreMenu() {
   const st = useSettings()
-  const openMenu = useUi((s) => s.openMenu)
+  const s = useFs()
+  const isMobile = useIsMobile()
+  const openMenu = useUi((s2) => s2.openMenu)
 
   const themeItems: MenuItem[] = THEMES.map((t) => ({
     label: st.theme === t.id ? `✓ ${t.name}` : t.name,
     onClick: () => st.set('theme', t.id),
   }))
+
+  const mobileItems: MenuItem[] = isMobile
+    ? [
+        { sep: true },
+        { label: st.viewMode === 'details' ? '切换到大图标' : '切换到详细列表', onClick: () => st.toggle('viewMode') },
+        { label: '刷新', onClick: () => void s.refresh() },
+        { label: '新建文件夹', onClick: () => s.createEntry('folder') },
+        { label: '新建文本文档', onClick: () => s.createEntry('file') },
+      ]
+    : []
 
   return (
     <IconBtn
@@ -251,6 +292,7 @@ function MoreMenu() {
           },
           { sep: true },
           ...themeItems,
+          ...mobileItems,
           { sep: true },
           {
             label: '内存占用诊断',
@@ -260,7 +302,7 @@ function MoreMenu() {
         ])
       }}
     >
-      <MoreHorizontal className="h-4.5 w-4.5" />
+      <MoreHorizontal className="h-5 w-5 md:h-4.5 md:w-4.5" />
     </IconBtn>
   )
 }

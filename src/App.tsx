@@ -184,7 +184,7 @@ export default function App() {
   const showWelcome = s.ready && s.tabs.length === 0
 
   return (
-    <div className="flex h-full flex-col bg-app text-txt">
+    <div className="flex h-full flex-col bg-app text-txt pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <Toolbar />
       <div className="flex min-h-0 flex-1">
         <Sidebar />

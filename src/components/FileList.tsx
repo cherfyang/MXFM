@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Loader2, FolderPlus, ChevronDown, ChevronUp } from 'lucide-react'
+import { Loader2, FolderPlus, ChevronDown, ChevronUp, ChevronRight } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { useSettings, type SortKey } from '../stores/settings'
 import { useUi } from '../stores/ui'
@@ -12,10 +12,62 @@ import { isValidName } from '../utils/path'
 import { EntryIcon } from './Icons'
 import { buildEntryMenuItems, buildEmptyMenuItems } from '../stores/fs'
 import { setDragPayload, getDragPayload } from './dnd'
+import { useIsMobile } from '../hooks/useIsMobile'
+
+// ---------- 触屏长按(全局单指状态) ----------
+const lp = { timer: 0, fired: false, x: 0, y: 0, path: '' }
+const emptyLp = { timer: 0 }
+
+function lpClear() {
+  if (lp.timer) window.clearTimeout(lp.timer)
+  if (emptyLp.timer) window.clearTimeout(emptyLp.timer)
+}
+
+function lpOpenMenu(x: number, y: number, path: string) {
+  const s = useFs.getState()
+  const tabId = s.activeId
+  const entries = s.listings[tabId]?.entries ?? []
+  let sel = s.selection[tabId] ?? []
+  if (!sel.includes(path)) {
+    useFs.setState({ selection: { ...s.selection, [tabId]: [path] } })
+    sel = [path]
+  }
+  const selEntries = entries.filter((e) => sel.includes(e.path))
+  useUi.getState().openMenu(x, y, buildEntryMenuItems(selEntries))
+}
+
+function lpStart(e: React.TouchEvent, entry: FileEntry) {
+  const t = e.touches[0]
+  lp.x = t.clientX
+  lp.y = t.clientY
+  lp.path = entry.path
+  lp.fired = false
+  lpClear()
+  lp.timer = window.setTimeout(() => {
+    lp.fired = true
+    lpOpenMenu(lp.x, lp.y, entry.path)
+  }, 480)
+}
+
+function lpMove(e: React.TouchEvent) {
+  const t = e.touches[0]
+  if (Math.hypot(t.clientX - lp.x, t.clientY - lp.y) > 12) {
+    if (lp.timer) window.clearTimeout(lp.timer)
+  }
+}
+
+function lpConsume(path: string): boolean {
+  if (lp.fired && lp.path === path) {
+    lp.fired = false
+    return true
+  }
+  return false
+}
 
 export function FileList() {
   const s = useFs()
   const st = useSettings()
+  const isMobile = useIsMobile()
   const openMenu = useUi((s2) => s2.openMenu)
   const tab = s.tabs.find((t) => t.id === s.activeId)
   const listing = tab ? s.listings[tab.id] : undefined
@@ -54,8 +106,14 @@ export function FileList() {
       selected: selSet.has(entry.path),
       index,
       onClick: (e: React.MouseEvent) => {
+        if (lpConsume(entry.path)) return
         if (e.ctrlKey || e.metaKey || e.shiftKey) {
           s.clickSelect(entry, index, entries, e)
+          return
+        }
+        // 手机上:文件夹单击直接进入
+        if (isMobile && entry.kind === 'directory') {
+          s.openEntry(entry)
           return
         }
         if (entry.kind === 'file' && st.singleClickOpen) {
@@ -65,6 +123,12 @@ export function FileList() {
           s.clickSelect(entry, index, entries, e)
         }
       },
+      onTouchStart: (e: React.TouchEvent) => {
+        e.stopPropagation()
+        lpStart(e, entry)
+      },
+      onTouchMove: lpMove,
+      onTouchEnd: lpClear,
       onDoubleClick: () => {
         if (entry.kind === 'directory') s.openEntry(entry)
         else if (!st.singleClickOpen) s.openEntry(entry)
@@ -113,6 +177,17 @@ export function FileList() {
       e.preventDefault()
       openMenu(e.clientX, e.clientY, buildEmptyMenuItems())
     },
+    onTouchStart: (e: React.TouchEvent) => {
+      if ((e.target as HTMLElement).closest('[draggable]')) return
+      const t = e.touches[0]
+      const x = t.clientX
+      const y = t.clientY
+      emptyLp.timer = window.setTimeout(() => {
+        useUi.getState().openMenu(x, y, buildEmptyMenuItems())
+      }, 480)
+    },
+    onTouchMove: lpClear,
+    onTouchEnd: lpClear,
     onDragOver: (e: React.DragEvent) => {
       if (getDragPayload()) e.preventDefault()
       setDropping(true)
@@ -299,6 +374,9 @@ interface RowData {
   selected: boolean
   index: number
   onClick(e: React.MouseEvent): void
+  onTouchStart(e: React.TouchEvent): void
+  onTouchMove(e: React.TouchEvent): void
+  onTouchEnd(): void
   onDoubleClick(): void
   onContext(e: React.MouseEvent): void
   onDragStartRow(e: React.DragEvent): void
@@ -319,10 +397,10 @@ interface ViewProps {
 }
 
 // ---------- 详细列表 ----------
-const ROW_H = 30
-
 function DetailsView({ entries, rowProps, scrollRef, containerCls, containerHandlers, renamingPath, commitRename, cancelRename }: ViewProps) {
   const st = useSettings()
+  const isMobile = useIsMobile()
+  const ROW_H = isMobile ? 58 : 30
   const [droppingPath, setDroppingPath] = useState<string | null>(null)
   const virt = useVirtualizer({
     count: entries.length,
@@ -355,9 +433,13 @@ function DetailsView({ entries, rowProps, scrollRef, containerCls, containerHand
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div className="flex h-8 shrink-0 select-none items-center border-b border-brd bg-panel pl-2">
         {sortBtn('name', '名称')}
-        {sortBtn('size', '大小', 120)}
-        {sortBtn('type', '类型', 120)}
-        {sortBtn('modified', '修改日期', 130)}
+        {!isMobile && (
+          <>
+            {sortBtn('size', '大小', 120)}
+            {sortBtn('type', '类型', 120)}
+            {sortBtn('modified', '修改日期', 130)}
+          </>
+        )}
       </div>
       <div
         ref={scrollRef}
@@ -370,6 +452,45 @@ function DetailsView({ entries, rowProps, scrollRef, containerCls, containerHand
             const rp = rowProps(entry, vi.index)
             const renaming = renamingPath === entry.path
             const dropping = droppingPath === entry.path
+            if (isMobile) {
+              return (
+                <div
+                  key={entry.path}
+                  style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: ROW_H, transform: `translateY(${vi.start}px)` }}
+                  draggable={false}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    rp.onClick(e)
+                  }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation()
+                    rp.onDoubleClick()
+                  }}
+                  onContextMenu={rp.onContext}
+                  onTouchStart={rp.onTouchStart}
+                  onTouchMove={rp.onTouchMove}
+                  onTouchEnd={rp.onTouchEnd}
+                  onDrop={rp.onDropRow}
+                  className={`flex cursor-default items-center gap-3 px-3 ${
+                    rp.selected ? 'bg-sel' : 'active:bg-hover'
+                  }`}
+                  title={entry.name}
+                >
+                  <EntryIcon category={categoryOf(entry)} className="h-6 w-6" />
+                  <span className="min-w-0 flex-1">
+                    {renaming ? (
+                      <RenameInput initial={entry.name} onCommit={commitRename} onCancel={cancelRename} />
+                    ) : (
+                      <span className="block truncate text-[15px] leading-5">{entry.name}</span>
+                    )}
+                    <span className="block truncate text-xs leading-4 text-txt2">
+                      {describeType(entry)} · {entry.kind === 'file' ? fmtBytes(entry.size) : fmtDate(entry.modified)}
+                    </span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-txt2" />
+                </div>
+              )
+            }
             return (
               <div
                 key={entry.path}
@@ -384,6 +505,9 @@ function DetailsView({ entries, rowProps, scrollRef, containerCls, containerHand
                   rp.onDoubleClick()
                 }}
                 onContextMenu={rp.onContext}
+                onTouchStart={rp.onTouchStart}
+                onTouchMove={rp.onTouchMove}
+                onTouchEnd={rp.onTouchEnd}
                 onDragStart={rp.onDragStartRow}
                 onDragEnd={rp.onDragEndRow}
                 onDragOver={(e) => {
@@ -525,6 +649,9 @@ function Tile({
         rp.onDoubleClick()
       }}
       onContextMenu={rp.onContext}
+      onTouchStart={rp.onTouchStart}
+      onTouchMove={rp.onTouchMove}
+      onTouchEnd={rp.onTouchEnd}
       onDragStart={rp.onDragStartRow}
       onDragEnd={rp.onDragEndRow}
       onDragOver={(e) => {

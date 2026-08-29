@@ -171,7 +171,7 @@ export function ViewerHost({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-app">
       {!embedded && (
-        <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-brd bg-panel px-2">
+        <div className="flex h-12 shrink-0 items-center gap-1.5 border-b border-brd bg-panel px-2 md:h-10">
           <IconBtn title="返回 (Esc)" onClick={() => (onBack ? onBack() : s.requestCloseView())}>
             <ArrowLeft className="h-4.5 w-4.5" />
           </IconBtn>

@@ -29,7 +29,7 @@ function Shell({ children, title, onClose }: { children: React.ReactNode; title:
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="mx-fade w-[400px] rounded-xl border border-brd bg-panel p-5 shadow-2xl shadow-black/30">
+      <div className="mx-fade w-[min(400px,calc(100vw-24px))] rounded-xl border border-brd bg-panel p-5 shadow-2xl shadow-black/30">
         <div className="mb-3 text-[15px] font-semibold">{title}</div>
         {children}
       </div>
