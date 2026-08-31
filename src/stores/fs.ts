@@ -3,7 +3,7 @@ import type { FSProvider, FileEntry, RootInfo, ConflictMode } from '../fs/types'
 import { FsaProvider } from '../fs/fsa'
 import { ElectronProvider } from '../fs/electron'
 import { CapacitorProvider, isCapacitorNative } from '../fs/capacitor'
-import { HOME_PATH } from './scan'
+import { HOME_PATH, useScan } from './scan'
 import { MemoryProvider, buildDemoRoot } from '../fs/memory'
 import { copyEntries, type CopyItem } from '../fs/ops'
 import { idbAllRoots, idbPutRoot, idbDeleteRoot } from '../fs/idb'
@@ -534,6 +534,8 @@ export const useFs = create<FsState>()((set, get) => {
         anchor: { ...s.anchor, [tab.id]: undefined },
         renamingPath: null,
       })
+      // 主动导航离开主页时,复位主页分类展开状态
+      if (path !== HOME_PATH) useScan.setState({ openGroup: null })
       void loadDir(tab.id)
     },
 

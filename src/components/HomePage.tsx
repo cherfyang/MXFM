@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   FileImage,
@@ -33,7 +33,10 @@ const GROUP_STYLE: Record<ScanGroup, { icon: typeof FileImage; cls: string }> = 
 export function HomePage() {
   const scan = useScan()
   const s = useFs()
-  const [openGroup, setOpenGroup] = useState<ScanGroup | null>(null)
+  // 分类展开状态存 scan store(而非组件 useState):打开文件预览会卸载主页组件,
+  // 关闭预览返回时靠 store 恢复到原来的分类列表
+  const openGroup = scan.openGroup
+  const setOpenGroup = scan.setOpenGroup
 
   // 启动自动更新:数据缺失或距上次扫描超过 30 分钟时自动重扫
   useEffect(() => {

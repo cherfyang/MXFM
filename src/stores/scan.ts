@@ -73,6 +73,9 @@ interface ScanState {
   scannedDirs: number
   lastScanAt: number | null
   groups: Record<ScanGroup, CatResult>
+  /** 主页当前展开的分类;放 store 里,打开文件预览使主页卸载后返回时仍能恢复 */
+  openGroup: ScanGroup | null
+  setOpenGroup(g: ScanGroup | null): void
   scan(): Promise<void>
 }
 
@@ -98,6 +101,8 @@ export const useScan = create<ScanState>()((set, get) => ({
   scannedDirs: 0,
   lastScanAt: initial.lastScanAt,
   groups: initial.groups,
+  openGroup: null,
+  setOpenGroup: (g) => set({ openGroup: g }),
 
   async scan() {
     if (get().running) return
