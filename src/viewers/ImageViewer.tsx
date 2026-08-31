@@ -8,6 +8,8 @@ import {
   Loader2,
   ImageOff,
   Save,
+  Wand2,
+  X,
 } from 'lucide-react'
 import type { ViewerProps } from './registry'
 import { useBlobUrl } from './registry'
@@ -15,8 +17,50 @@ import { useFs } from '../stores/fs'
 import { useUi } from '../stores/ui'
 import { IconBtn } from '../components/ui'
 
+function LazyEditor({ url, entry, onClose }: { url: string; entry: import('../fs/types').FileEntry; onClose(): void }) {
+  const [Comp, setComp] = useState<React.ComponentType<Record<string, unknown>> | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    import('react-filerobot-image-editor')
+      .then((m) => setComp(() => m.default as unknown as React.ComponentType<Record<string, unknown>>))
+      .catch((e) => setErr((e as Error).message))
+  }, [])
+  if (err) return <div className="flex h-full items-center justify-center text-sm text-txt">编辑器加载失败:{err}</div>
+  if (!Comp)
+    return (
+      <div className="flex h-full items-center justify-center text-txt2">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 加载编辑器…
+      </div>
+    )
+  return (
+    <Comp
+      source={url}
+      onClose={onClose}
+      defaultSavedImageType="png"
+      defaultSavedImageName={entry.name.replace(/\.[^.]+$/, '') + '-edited'}
+      onSave={async (res: { imageBase64?: string; fullName?: string }) => {
+        const dataUrl = res.imageBase64
+        if (!dataUrl) return
+        const blob = await (await fetch(dataUrl)).blob()
+        const s = (await import('../stores/fs')).useFs.getState()
+        const provider = s.provider!
+        const dir = entry.path.slice(0, entry.path.length - entry.name.length - 1)
+        const base = entry.name.replace(/\.[^.]+$/, '')
+        const name = (await provider.exists(`${dir}/${base}-edited.png`))
+          ? await provider.uniqueName(dir, `${base}-edited.png`)
+          : `${base}-edited.png`
+        await provider.writeBlob(`${dir}/${name}`, blob)
+        ;(await import('../stores/ui')).useUi.getState().toast(`已保存为「${name}」`, 'success')
+        await s.refresh()
+        onClose()
+      }}
+    />
+  )
+}
+
 export function ImageViewer({ entry, nav }: ViewerProps) {
   const url = useBlobUrl(entry)
+  const [editorOpen, setEditorOpen] = useState(false)
   const [scale, setScale] = useState(1)
   const [rot, setRot] = useState(0)
   const [flip, setFlip] = useState(false)
@@ -28,6 +72,7 @@ export function ImageViewer({ entry, nav }: ViewerProps) {
     setRot(0)
     setFlip(false)
     setErr(false)
+    setEditorOpen(false)
   }, [entry.path])
 
   const zoom = (d: number) => setScale((s) => Math.min(8, Math.max(0.1, +(s * d).toFixed(3))))
@@ -115,7 +160,24 @@ export function ImageViewer({ entry, nav }: ViewerProps) {
         <IconBtn title="另存为 PNG 副本" onClick={() => void saveCopy()}>
           <Save className="h-4 w-4" />
         </IconBtn>
+        <IconBtn title="图片编辑器(裁剪/标注/滤镜)" onClick={() => setEditorOpen(true)}>
+          <Wand2 className="h-4 w-4" />
+        </IconBtn>
       </div>
+
+      {editorOpen && url && (
+        <div className="absolute inset-0 z-30 flex flex-col bg-black/90 p-1 md:p-4">
+          <div className="mb-1 flex h-9 shrink-0 items-center justify-between px-2">
+            <span className="text-xs text-white/70">图片编辑器</span>
+            <button onClick={() => setEditorOpen(false)} className="rounded p-1.5 text-white/70 hover:bg-white/10 hover:text-white" title="关闭编辑器">
+              <X className="h-4.5 w-4.5" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-hidden rounded-lg bg-panel">
+            <LazyEditor url={url} entry={entry} onClose={() => setEditorOpen(false)} />
+          </div>
+        </div>
+      )}
 
       {nav && (
         <>

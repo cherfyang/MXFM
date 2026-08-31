@@ -44,6 +44,8 @@ export interface FSProvider {
   uniqueName(dir: string, name: string): Promise<string>
   /** 桌面版:本地文件的流式播放地址(视频/音频);返回 undefined 则走 blob URL */
   mediaUrl?(path: string): string | undefined
+  /** 桌面版:虚拟路径 → 本地绝对路径 */
+  toNativePath?(path: string): string
   /** 桌面版:用系统默认程序打开(外部应用,如 Word) */
   openInSystem?(path: string): Promise<void>
 }

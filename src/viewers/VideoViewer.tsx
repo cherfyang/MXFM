@@ -15,6 +15,7 @@ import {
 import type { ViewerProps } from './registry'
 import { useBlobUrl } from './registry'
 import { fmtTime } from './playerUtil'
+import { TranscodeOverlay, VIDEO_NEED_TRANSCODE, transcodeAvailable } from './TranscodeOverlay'
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
@@ -34,6 +35,8 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
   const [err, setErr] = useState(false)
   const [controlsVisible, setControlsVisible] = useState(true)
   const hideTimer = useRef<number | null>(null)
+  const [overrideUrl, setOverrideUrl] = useState<string | null>(null)
+  const [forcedTranscode, setForcedTranscode] = useState(false)
 
   const posKey = `mx-vp:${entry.path}`
 
@@ -42,6 +45,8 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
     setErr(false)
     setTime(0)
     setDuration(0)
+    setOverrideUrl(null)
+    setForcedTranscode(false)
   }, [entry.path])
 
   useEffect(() => {
@@ -171,6 +176,25 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
 
   const pct = duration > 0 ? (time / duration) * 100 : 0
 
+  const nativeNeedsTranscode = !overrideUrl && transcodeAvailable() && VIDEO_NEED_TRANSCODE.has(entry.ext)
+  const showTranscode = nativeNeedsTranscode || forcedTranscode
+
+  if (showTranscode) {
+    return (
+      <div className="relative h-full bg-black">
+        <TranscodeOverlay
+          entry={entry}
+          kind="video"
+          auto={nativeNeedsTranscode}
+          onReady={(u) => {
+            setOverrideUrl(u)
+            setForcedTranscode(false)
+          }}
+        />
+      </div>
+    )
+  }
+
   return (
     <div
       ref={wrapRef}
@@ -181,10 +205,11 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
         fullscreen ? '' : 'rounded-none'
       }`}
     >
-      {url && (
+      {(overrideUrl || url) && (
         <video
+          key={overrideUrl ?? url}
           ref={videoRef}
-          src={url}
+          src={overrideUrl ?? url ?? undefined}
           loop={loop}
           className="h-full w-full object-contain"
           onClick={togglePlay}
@@ -210,7 +235,10 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
             setPlaying(false)
             setControlsVisible(true)
           }}
-          onError={() => setErr(true)}
+          onError={() => {
+            // 桌面版遇到不认识的编码时,提供转码兜底
+            setErr(true)
+          }}
         />
       )}
 
@@ -220,11 +248,20 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
         </div>
       )}
 
-      {err && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 text-center text-txt">
+      {err && !showTranscode && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 text-center text-txt">
           <AlertTriangle className="h-8 w-8 text-amber-400" />
           <div className="text-sm">浏览器不支持该视频编码</div>
-          <div className="text-xs text-txt2">MP4(H.264)/ WebM / MKV 支持最好;HEVC 需要系统解码器</div>
+          {transcodeAvailable() ? (
+            <button
+              onClick={() => setForcedTranscode(true)}
+              className="flex h-10 items-center gap-2 rounded-lg bg-acc px-5 text-sm text-white hover:opacity-90"
+            >
+              转码并播放
+            </button>
+          ) : (
+            <div className="text-xs text-txt2">MP4(H.264)/ WebM / MKV 支持最好;HEVC 需要系统解码器</div>
+          )}
         </div>
       )}
 

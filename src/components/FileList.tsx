@@ -358,7 +358,9 @@ function useThumb(entry: FileEntry): string | null {
         const provider = useFs.getState().provider
         if (!provider) return
         const f = await provider.getFile(entry.path)
-        const u = URL.createObjectURL(f)
+        const { decodeImageFile } = await import('../utils/imageDecode')
+        const blob = await decodeImageFile(f)
+        const u = URL.createObjectURL(blob)
         cacheThumb(key, u)
         if (alive) setUrl(u)
       } catch {

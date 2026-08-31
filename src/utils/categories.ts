@@ -10,23 +10,25 @@ export type Category =
   | 'word'
   | 'ppt'
   | 'zip'
+  | 'ebook'
   | 'code'
   | 'text'
   | 'legacy'
   | 'binary'
 
 const EXT_MAP: Record<Exclude<Category, 'folder' | 'binary'>, string[]> = {
-  image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico'],
-  video: ['mp4', 'm4v', 'webm', 'mkv', 'mov', 'ogv'],
-  audio: ['mp3', 'wav', 'ogg', 'oga', 'flac', 'm4a', 'aac', 'opus', 'weba'],
+  image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico', 'tif', 'tiff', 'heic', 'heif', 'psd'],
+  video: ['mp4', 'm4v', 'webm', 'mkv', 'mov', 'ogv', 'avi', 'wmv', 'flv', 'mpg', 'mpeg', 'mpe', 'ts', 'm2ts', 'vob', '3gp', 'asf', 'rm', 'rmvb', 'f4v'],
+  audio: ['mp3', 'wav', 'ogg', 'oga', 'flac', 'm4a', 'aac', 'opus', 'weba', 'ape', 'tta', 'wv', 'amr', 'ac3', 'dts', 'mka', 'caf'],
   markdown: ['md', 'markdown'],
   pdf: ['pdf'],
   csv: ['csv', 'tsv'],
-  excel: ['xlsx', 'xls', 'xlsm'],
+  excel: ['xlsx', 'xls', 'xlsm', 'ods', 'xlsb', 'dif', 'sylk'],
   word: ['docx'],
   ppt: ['pptx'],
   legacy: ['doc', 'dot', 'ppt', 'pot', 'pps', 'rtf'],
-  zip: ['zip'],
+  zip: ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz'],
+  ebook: ['epub'],
   code: [
     'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'json', 'jsonc', 'py', 'rb', 'go', 'rs', 'java',
     'c', 'h', 'cpp', 'hpp', 'cc', 'cxx', 'cs', 'php', 'swift', 'kt', 'kts', 'dart',
@@ -62,11 +64,12 @@ const LABELS: Record<Category, string> = {
   markdown: 'Markdown 文档',
   pdf: 'PDF 文档',
   csv: '表格数据',
-  excel: 'Excel 工作簿',
+  excel: '表格工作簿',
   word: 'Word 文档',
   ppt: 'PPT 演示文稿',
   legacy: '旧版 Office 文档',
-  zip: 'ZIP 压缩包',
+  zip: '压缩包',
+  ebook: '电子书',
   code: '源代码',
   text: '文本文档',
   binary: '文件',

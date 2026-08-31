@@ -270,6 +270,76 @@ ipcMain.handle('sys:memory', () => {
   return { rss: m.rss, heapUsed: m.heapUsed }
 })
 
+// ---------- ffmpeg 转码服务(播放浏览器不支持的格式) ----------
+const { spawn } = require('node:child_process')
+const crypto = require('node:crypto')
+
+function ffmpegPath() {
+  try {
+    let p = require('ffmpeg-static')
+    if (p && app.isPackaged) p = p.replace('app.asar', 'app.asar.unpacked')
+    return p
+  } catch {
+    return null
+  }
+}
+
+let transProc = null
+
+function runFfmpeg(args) {
+  return new Promise((resolve) => {
+    const ff = ffmpegPath()
+    if (!ff) return resolve(-1)
+    const p = spawn(ff, ['-hide_banner', '-loglevel', 'error', '-nostats', '-y', ...args], {
+      windowsHide: true,
+    })
+    transProc = p
+    p.on('close', (code) => resolve(code == null ? -1 : code))
+    p.on('error', () => resolve(-1))
+  })
+}
+
+ipcMain.handle('transcode:start', async (_e, srcPath, kind) => {
+  if (!ffmpegPath()) return { ok: false, msg: '未找到内置转码组件' }
+  try {
+    await fsp.access(srcPath)
+  } catch {
+    return { ok: false, msg: '源文件不存在' }
+  }
+  const outExt = kind === 'audio' ? 'mp3' : 'mp4'
+  const tmp = path.join(app.getPath('temp'), 'mx-fm-transcode')
+  try {
+    fs.mkdirSync(tmp, { recursive: true })
+  } catch {
+    /* ignore */
+  }
+  const hash = crypto.createHash('md5').update(srcPath + kind).digest('hex').slice(0, 12)
+  const outPath = path.join(tmp, hash + '.' + outExt)
+
+  // 快速路径:编码本身支持,只是容器不认识 → 直接重封装,秒级完成
+  if (kind === 'video') {
+    const code = await runFfmpeg(['-i', srcPath, '-c', 'copy', '-movflags', '+faststart', outPath])
+    if (code === 0) return { ok: true, outPath }
+  }
+  // 慢速路径:真转码
+  const args =
+    kind === 'audio'
+      ? ['-i', srcPath, '-vn', '-c:a', 'libmp3lame', '-q:a', '3', outPath]
+      : ['-i', srcPath, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', outPath]
+  const code = await runFfmpeg(args)
+  if (code === 0) return { ok: true, outPath }
+  return { ok: false, msg: '转码失败(可能是不支持的编码或文件已损坏)' }
+})
+
+ipcMain.handle('transcode:cancel', () => {
+  try {
+    transProc?.kill()
+  } catch {
+    /* ignore */
+  }
+  return true
+})
+
 // ---------- 本地文件流协议 ----------
 app.whenReady().then(() => {
   buildMenu()

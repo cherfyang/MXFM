@@ -16,6 +16,7 @@ import { CsvViewer } from './CsvViewer'
 import { XlsxViewer } from './XlsxViewer'
 import { DocxViewer } from './DocxViewer'
 import { ZipViewer } from './ZipViewer'
+import { EpubViewer } from './EpubViewer'
 import { HexViewer } from './HexViewer'
 
 export interface ViewerApi {
@@ -63,6 +64,7 @@ const VIEWERS: Record<Category, React.ComponentType<ViewerProps>> = {
   ppt: UnsupportedViewer,
   legacy: UnsupportedViewer,
   zip: ZipViewer,
+  ebook: EpubViewer,
   code: TextViewer,
   text: TextViewer,
   binary: HexViewer,
@@ -81,6 +83,7 @@ const CAT_LABEL: Record<Category, string> = {
   ppt: 'PowerPoint',
   legacy: '旧版 Office',
   zip: '压缩包',
+  ebook: '电子书',
   code: '代码',
   text: '文本',
   binary: '二进制',
@@ -256,10 +259,17 @@ export function useBlobUrl(entry: FileEntry | null): string | null {
       try {
         if (!provider) return
         const f = await provider.getFile(entry.path)
-        u = URL.createObjectURL(f)
+        const { decodeImageFile } = await import('../utils/imageDecode')
+        const blob = await decodeImageFile(f)
+        u = URL.createObjectURL(blob)
         if (alive) setUrl(u)
-      } catch {
-        if (alive) setUrl(null)
+      } catch (e) {
+        if (alive) {
+          setUrl(null)
+          import('../stores/ui').then(({ useUi }) =>
+            useUi.getState().toast((e as Error).message || '图片解码失败', 'error')
+          )
+        }
       }
     })()
     return () => {

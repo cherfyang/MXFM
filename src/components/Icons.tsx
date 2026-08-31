@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   Folder,
   FileText,
   FileCode,
@@ -27,6 +28,7 @@ const MAP: Record<Category, { C: LucideIcon; color: string }> = {
   ppt: { C: Presentation, color: 'text-orange-400' },
   legacy: { C: FileType, color: 'text-amber-400' },
   zip: { C: FileArchive, color: 'text-amber-400' },
+  ebook: { C: BookOpen, color: 'text-teal-400' },
   code: { C: FileCode, color: 'text-cyan-400' },
   text: { C: FileText, color: 'text-txt2' },
   binary: { C: Binary, color: 'text-txt2' },

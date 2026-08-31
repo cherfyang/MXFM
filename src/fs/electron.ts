@@ -93,6 +93,10 @@ export class ElectronProvider implements FSProvider {
     return base + segs.slice(1).join('/')
   }
 
+  toNativePath(path: string): string {
+    return this.toNative(path)
+  }
+
   addRoot(handle: unknown): void {
     this.mem.addRoot(handle)
   }

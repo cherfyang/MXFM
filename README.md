@@ -55,17 +55,16 @@ npm run dev        # 开发模式,默认 http://localhost:5173
 
 | 类别 | 格式 | 能力 |
 | --- | --- | --- |
-| 图片 | png jpg webp gif bmp svg avif ico | 缩放 / 旋转 / 翻转 / 另存副本 / 同类前后切换 |
-| 视频 | mp4 webm mkv mov | 内置播放器:倍速 / 进度 / 音量 / 截图 / 画中画 / 全屏 / 循环 / 记忆播放位置 |
-| 音频 | mp3 wav ogg flac m4a | 播放器 + 播放列表式前后切换 |
+| 图片 | png jpg webp gif bmp svg avif ico + **tif/tiff、heic/heif(iPhone 照片)、psd** | 缩放 / 旋转 / 翻转 / 另存副本 / 同类前后切换;TIFF/HEIC/PSD 自动解码显示(含缩略图) |
+| 图片编辑 | 全部可显示格式 | 内置 **Filerobot 编辑器**(开源):裁剪 / 标注 / 文字 / 滤镜,保存为新文件 |
+| 视频 | mp4 webm mkv mov m4v ogv + **avi wmv flv mpg/mpeg ts/m2ts vob 3gp asf rm/rmvb f4v** | 内置播放器(倍速/进度/音量/截图/画中画/全屏/循环/记忆位置);不支持的格式**自动 ffmpeg 转码**(先秒级重封装,再真转码) |
+| 音频 | mp3 wav ogg flac m4a aac opus + **ape tta wv amr ac3 dts mka caf** | 播放 + 前后切换;不支持的自动转码为 MP3 |
 | 文本 / 代码 | 50+ 扩展名自动识别 | CodeMirror 6 编辑器:语法高亮 / 查找替换 / Ctrl+S 保存 / GBK 自动检测 |
 | Markdown | md | 编辑 + 实时分屏预览 |
-| 表格 | csv | 虚拟表格、双击单元格编辑、引号转义完整解析、保存写回 |
-| Excel | xlsx xls | 多 sheet、单元格编辑、Ctrl+S 写回原文件(样式会丢失) |
-| Word | docx | 高保真只读渲染 |
-| PDF | pdf | 翻页 / 缩放(pdf.js) |
-| 压缩包 | zip | 浏览包内文件 / 直接预览文本与图片 / 一键解压 |
-| 二进制 / 未知 | 其他 | 扩展名 + magic bytes 双重嗅探,文本进编辑器,二进制进 HEX 查看器 |
+| 表格 | csv + **xlsx xls xlsm xlsb ods dif sylk** | 多 sheet、单元格编辑、Ctrl+S 写回(xlsx 族);csv 虚拟表格 |
+| 文档 | pdf docx + **epub 电子书** | PDF 翻页缩放;EPUB 分页阅读器(←→翻页) |
+| 压缩包 | **zip rar 7z tar gz/tgz bz2 xz** | 浏览包内文件 / 直接预览文本图片音视频;ZIP 支持一键解压 |
+| 二进制 / 未知 | 其他 | 扩展名 + 内容嗅探双保险,文本进编辑器,二进制进 HEX 查看器 |
 
 ## 架构
 
@@ -95,7 +94,7 @@ UI 层   React 19 + Tailwind 4:标签页 / 文件区 / 预览面板 / 查看器
 
 ## 已知限制
 
-桌面版:视频能否播放取决于内置 Chromium 解码器(H.264 / VP9 / AV1 ✅,HEVC 需系统解码器,avi / wmv 不支持);旧版 .doc / .xls 与 PowerPoint 不支持预览;Excel 保存会丢失单元格样式与公式(SheetJS 重写);安装包未签名,首次运行可能触发 SmartScreen 提示(点"仍要运行"即可)。
+桌面版:绝大多数格式可播可看——浏览器内核不认识的编码(如 AVI/WMV/RM)会自动调用内置 ffmpeg 转码后播放,大文件完整转码耗时较长;HEVC 视频优先走系统解码器。RAW 相机格式(CR2/NEF/ARW)与 JPEG XL 暂不支持;旧版 .doc / .ppt 可一键用系统程序打开;Excel 保存会丢失单元格样式与公式(SheetJS 重写);RAR/7z 支持包内浏览与单文件提取,一键解压目前仅 ZIP;安装包未签名,首次运行可能触发 SmartScreen 提示(点"仍要运行"即可)。
 
 浏览器版额外限制:无法凭路径字符串直接进入未授权目录;文件夹重命名 = 重建 + 逐个迁移(大目录较慢),跨根移动 = 复制 + 删除;HEVC 需系统支持;无实时文件变更监听(用 F5 刷新)。
 
