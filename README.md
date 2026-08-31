@@ -17,7 +17,14 @@
 
 每次推送 `v*` 标签(或在 [Actions](https://github.com/cherfyang/MXFM/actions/workflows/release.yml) 手动运行)都会自动构建两个平台的安装包并发布。
 
-> 安装包未做代码签名,首次运行如遇 SmartScreen 提示,点「仍要运行」即可。
+> 安装包未做代码签名:
+>
+> - **Windows**:首次运行如遇 SmartScreen 提示,点「仍要运行」即可。
+> - **macOS**:首次打开若提示**「已损坏,无法打开,建议移到废纸篓」**,并非文件真的损坏,而是系统拦截了未签名的应用。打开前在终端执行下面一条命令即可(以后每次更新版本重新拖入后,需再执行一次):
+>
+>   ```bash
+>   xattr -cr "/Applications/MX文件管理器.app"
+>   ```
 
 ## 核心功能
 
