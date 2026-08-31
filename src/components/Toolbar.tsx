@@ -20,12 +20,14 @@ import {
   Check,
   Gauge,
   X,
+  Home,
 } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { useSettings, THEMES } from '../stores/settings'
 import { useUi, type MenuItem } from '../stores/ui'
 import { segments } from '../utils/path'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { HOME_PATH } from '../stores/scan'
 import { getDragPayload } from './dnd'
 import { IconBtn } from './ui'
 
@@ -56,7 +58,7 @@ export function Toolbar() {
             >
               <ArrowRight className="h-4.5 w-4.5" />
             </IconBtn>
-            <IconBtn title="上一级 (Backspace)" disabled={!path || segments(path).length <= 1} onClick={() => s.goUp()}>
+            <IconBtn title="上一级 (Backspace)" disabled={!path || path === HOME_PATH || segments(path).length <= 1} onClick={() => s.goUp()}>
               <ArrowUp className="h-4.5 w-4.5" />
             </IconBtn>
             <IconBtn title="刷新 (F5)" disabled={!path} onClick={() => void s.refresh()}>
@@ -163,6 +165,7 @@ function Breadcrumb({ path }: { path: string }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dropping, setDropping] = useState(false)
   const segs = segments(path)
+  const isHome = path === HOME_PATH
 
   useEffect(() => {
     if (editing) {
@@ -177,6 +180,15 @@ function Breadcrumb({ path }: { path: string }) {
   }
 
   if (!path) return <div className="min-w-0 flex-1" />
+
+  if (isHome) {
+    return (
+      <div className="mx-1 flex min-w-0 flex-1 items-center gap-1.5 px-1.5">
+        <Home className="h-4 w-4 text-acc" />
+        <span className="text-[13px] font-medium">主页 · 本机文件总览</span>
+      </div>
+    )
+  }
 
   if (editing) {
     return (

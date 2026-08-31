@@ -1,6 +1,6 @@
 name: Release
 
-# 推送 v* 标签时,自动构建 Windows / macOS / Linux 桌面安装包,并发布到 GitHub Release
+# 推送 v* 标签时,自动构建 Windows / macOS 桌面安装包,并发布到 GitHub Release
 on:
   push:
     tags: ["v*"]
@@ -22,9 +22,6 @@ jobs:
           - os: macos-latest
             args: --mac
             glob: release/*.dmg
-          - os: ubuntu-latest
-            args: --linux
-            glob: release/*.AppImage
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -69,4 +66,3 @@ jobs:
           files: |
             artifacts/*.exe
             artifacts/*.dmg
-            artifacts/*.AppImage

@@ -3,6 +3,7 @@ import type { FSProvider, FileEntry, RootInfo, ConflictMode } from '../fs/types'
 import { FsaProvider } from '../fs/fsa'
 import { ElectronProvider } from '../fs/electron'
 import { CapacitorProvider, isCapacitorNative } from '../fs/capacitor'
+import { HOME_PATH } from './scan'
 import { MemoryProvider, buildDemoRoot } from '../fs/memory'
 import { copyEntries, type CopyItem } from '../fs/ops'
 import { idbAllRoots, idbPutRoot, idbDeleteRoot } from '../fs/idb'
@@ -124,6 +125,7 @@ async function restoreSession() {
   if (!restored) {
     useFs.setState({ ready: true })
     persistSession([], '')
+    if (useFs.getState().provider?.kind === 'native') useFs.getState().newTab(HOME_PATH)
   }
 }
 
@@ -469,6 +471,17 @@ export const useFs = create<FsState>()((set, get) => {
       const cur = activeTab()
       const fallback = cur ? cur.history[cur.idx] : s.roots[0] ? `/${s.roots[0].name}` : ''
       const p = path ?? fallback
+      if (p === HOME_PATH) {
+        const existing = s.tabs.find((t) => t.history[t.idx] === HOME_PATH)
+        if (existing) {
+          get().setActive(existing.id)
+          return
+        }
+        const tab: Tab = { id: nextTabId(), history: [HOME_PATH], idx: 0, view: null, filter: '' }
+        const tabs = [...s.tabs, tab]
+        set({ tabs: withSession(tabs, tab.id), activeId: tab.id, selection: { ...s.selection, [tab.id]: [] }, listings: { ...s.listings, [tab.id]: { entries: [], loading: false } } })
+        return
+      }
       const rootName = p.split('/').filter(Boolean)[0]
       const target = p && s.provider!.hasRoot(rootName) ? p : s.roots[0] ? `/${s.roots[0].name}` : ''
       if (!target) return
@@ -545,12 +558,18 @@ export const useFs = create<FsState>()((set, get) => {
     goUp() {
       const tab = activeTab()
       if (!tab) return
+      if (tab.history[tab.idx] === HOME_PATH) return
       const parent = parentOf(tab.history[tab.idx])
       if (parent !== '/') get().navigate(parent)
     },
 
     async refresh(tabId) {
       const id = tabId ?? get().activeId
+      const tab = get().tabs.find((t) => t.id === id)
+      if (tab?.history[tab.idx] === HOME_PATH) {
+        await (await import('./scan')).useScan.getState().scan()
+        return
+      }
       if (id) await loadDir(id)
     },
 

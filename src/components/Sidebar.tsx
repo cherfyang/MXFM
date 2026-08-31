@@ -1,4 +1,5 @@
-import { FolderOpen, Plus, X, Zap, MonitorPlay, HardDrive } from 'lucide-react'
+import { FolderOpen, Plus, X, Zap, MonitorPlay, HardDrive, Home } from 'lucide-react'
+import { HOME_PATH } from '../stores/scan'
 import { useFs } from '../stores/fs'
 import { useSettings } from '../stores/settings'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -20,7 +21,23 @@ export function Sidebar() {
 
   const body = (
     <>
-      <div className="px-3 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wider text-txt2">位置</div>
+      <div className="px-3 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wider text-txt2">主页</div>
+      <div className="px-2 pb-1">
+        <div
+          role="button"
+          onClick={() => {
+            const t = s.tabs.find((t) => t.history[t.idx] === HOME_PATH)
+            if (t) s.setActive(t.id)
+            else s.newTab(HOME_PATH)
+            closeOnMobile()
+          }}
+          className="flex h-9 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] md:h-8"
+        >
+          <Home className="h-4 w-4 shrink-0 text-acc" />
+          <span className="flex-1">文件总览</span>
+        </div>
+      </div>
+      <div className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-txt2">位置</div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {s.roots.map((r) => (
           <div

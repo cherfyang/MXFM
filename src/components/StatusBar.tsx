@@ -1,4 +1,5 @@
 import { useFs } from '../stores/fs'
+import { HOME_PATH } from '../stores/scan'
 
 export function StatusBar() {
   const s = useFs()
@@ -27,7 +28,7 @@ export function StatusBar() {
         </span>
       )}
       <span className="flex-1" />
-      {tab?.history[tab.idx] && <span className="max-w-[40%] truncate">{tab.history[tab.idx]}</span>}
+      {tab?.history[tab.idx] && <span className="max-w-[40%] truncate">{tab.history[tab.idx] === HOME_PATH ? '主页' : tab.history[tab.idx]}</span>}
       <span className="rounded bg-panel2 px-1.5 py-0.5 text-[11px]">
         {s.provider?.kind === 'memory' ? '演示数据' : s.provider?.kind === 'native' ? '本地磁盘' : '浏览器授权'}
       </span>

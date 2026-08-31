@@ -1,6 +1,7 @@
 import { X, Plus } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { baseName } from '../utils/path'
+import { HOME_PATH } from '../stores/scan'
 import { EntryIcon } from './Icons'
 
 export function TabsBar() {
@@ -17,7 +18,7 @@ export function TabsBar() {
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {tabs.map((t) => {
           const active = t.id === activeId
-          const title = baseName(t.history[t.idx]) || t.history[t.idx]
+          const title = t.history[t.idx] === HOME_PATH ? '主页' : baseName(t.history[t.idx]) || t.history[t.idx]
           return (
             <div
               key={t.id}

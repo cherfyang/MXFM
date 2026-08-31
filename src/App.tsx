@@ -15,6 +15,8 @@ import { PreviewPanel } from './components/PreviewPanel'
 import { ViewerHost } from './viewers/registry'
 import { processEntries } from './utils/listing'
 import { themeMeta } from './stores/settings'
+import { HomePage } from './components/HomePage'
+import { HOME_PATH } from './stores/scan'
 
 export default function App() {
   const s = useFs()
@@ -39,7 +41,7 @@ export default function App() {
   useEffect(() => {
     const cur = s.tabs.find((t) => t.id === s.activeId)
     const path = cur?.history[cur.idx]
-    const name = path ? path.split('/').filter(Boolean).pop() : ''
+    const name = path === HOME_PATH ? '主页' : path ? path.split('/').filter(Boolean).pop() : ''
     document.title = name ? `${decodeURIComponent(name)} - MX 文件管理器` : 'MX 文件管理器'
   }, [s.activeId, s.tabs])
 
@@ -212,6 +214,8 @@ export default function App() {
           <TabsBar />
           {tab?.view ? (
             <ViewerHost entry={tab.view.entry} category={tab.view.category} />
+          ) : tab && tab.history[tab.idx] === HOME_PATH ? (
+            <HomePage />
           ) : showWelcome ? (
             <Welcome />
           ) : (
