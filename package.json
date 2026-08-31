@@ -1,7 +1,7 @@
 {
   "name": "mx-file-manager",
   "private": true,
-  "version": "0.5.0",
+  "version": "1.0.0",
   "type": "module",
   "main": "electron/main.cjs",
   "author": "mengx",
@@ -43,7 +43,8 @@
       "artifactName": "MXFileManager-Setup-${version}.exe"
     },
     "mac": {
-      "icon": "build/icon.icns"
+      "icon": "build/icon.icns",
+      "artifactName": "MXFileManager-${version}-${arch}.${ext}"
     },
     "linux": {
       "icon": "build/icon-512.png"
