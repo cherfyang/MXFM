@@ -123,8 +123,10 @@ export function useCodeEditor(opts: {
     })()
     return () => {
       cancelled = true
-      ;(view as unknown as { __offEsc?: () => void }).__offEsc?.()
-      view?.destroy()
+      if (view) {
+        ;(view as unknown as { __offEsc?: () => void }).__offEsc?.()
+        view.destroy()
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, ext, readOnly])
