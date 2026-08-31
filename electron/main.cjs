@@ -349,7 +349,9 @@ app.whenReady().then(() => {
   protocol.handle('mxfile', (request) => {
     try {
       const u = new URL(request.url)
-      const p = decodeURIComponent(u.pathname).replace(/^\/+/, '')
+      let p = decodeURIComponent(u.pathname)
+      // Windows 的 '/C:/x' 需剥掉开头斜杠;mac/Linux 的绝对路径必须保留,否则会被当成相对路径解析
+      if (/^\/[A-Za-z]:\//.test(p)) p = p.slice(1)
       return net.fetch(pathToFileURL(p))
     } catch {
       return new Response('bad request', { status: 400 })
