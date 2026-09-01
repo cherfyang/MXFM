@@ -5,16 +5,46 @@ import { ElectronProvider } from '../fs/electron'
 import { CapacitorProvider, isCapacitorNative } from '../fs/capacitor'
 import { HOME_PATH, useScan } from './scan'
 import { MemoryProvider, buildDemoRoot } from '../fs/memory'
-import { copyEntries, type CopyItem } from '../fs/ops'
+import {
+  copyEntries,
+  removeWithResult,
+  isAbortError,
+  type BulkProgress,
+  type CopyItem,
+} from '../fs/ops'
 import { idbAllRoots, idbPutRoot, idbDeleteRoot } from '../fs/idb'
 import { joinPath, parentOf, baseName, isValidName } from '../utils/path'
 import { categoryOf, type Category } from '../utils/categories'
 import { useUi, type MenuItem } from './ui'
+import { useSettings } from './settings'
 
 export interface ViewedFile {
   entry: FileEntry
   category: Category
   dirty: boolean
+}
+
+/** 本轮主进程新增的能力(preload 已暴露),与 ElectronProvider 共用同一个 window.mxAPI 对象 */
+interface NativeExtras {
+  watchStart(dir: string): Promise<number>
+  watchStop(id: number): Promise<void>
+  watchStopAll(): Promise<void>
+  onFsChanged(cb: (p: { watchId: number; dir: string }) => void): () => void
+  clipWrite(paths: string[], cut: boolean): Promise<{ ok: true }>
+  clipRead(): Promise<{ paths: string[]; cut: boolean } | null>
+  openInTerminal(dir: string): Promise<{ ok: true }>
+}
+
+/** 能力探测:旧版 preload 没有这些方法时整体返回 null,所有新特性静默关闭 */
+function nativeExtras(): NativeExtras | null {
+  if (typeof window === 'undefined') return null
+  const api = (window as unknown as { mxAPI?: Partial<NativeExtras> }).mxAPI
+  if (!api) return null
+  const need = ['watchStart', 'watchStop', 'watchStopAll', 'onFsChanged', 'clipWrite', 'clipRead', 'openInTerminal'] as const
+  for (const k of need) {
+    if (typeof api[k] !== 'function') return null
+  }
+  return api as NativeExtras
 }
 
 export interface Tab {
@@ -30,11 +60,41 @@ interface Listing {
   loading: boolean
 }
 
+/**
+ * 进行中的文件操作状态(状态栏展示)。
+ * done/total 在批量流式作业下是「已处理文件数/总文件数」;
+ * bytesDone/bytesTotal 同时给出字节级进度,UI 可以显示「第 3/120 个文件 · 45%」。
+ */
+export interface OpState {
+  label: string
+  done: number
+  total: number
+  /** 已搬运字节数(仅批量流式作业有) */
+  bytesDone?: number
+  /** 待搬运总字节数;0 表示主进程尚未统计出来 */
+  bytesTotal?: number
+  /** 当前正在处理的文件名 */
+  currentName?: string
+  /** 是否可取消(批量流式作业进行中才有意义) */
+  canCancel?: boolean
+}
+
+/** 最近删除记录(写 localStorage,重启后仍可查看) */
+export interface DeletedRecord {
+  path: string
+  name: string
+  kind: 'file' | 'directory'
+  at: number
+  trashed: boolean
+}
+
 type UndoOp =
   | { kind: 'create'; target: CopyItem }
   | { kind: 'rename'; from: string; to: string; entryKind: 'file' | 'directory' }
-  | { kind: 'paste'; created: CopyItem[] }
+  | { kind: 'paste'; created: CopyItem[]; sources: CopyItem[] }
   | { kind: 'move'; pairs: { created: CopyItem; source: CopyItem }[] }
+  /** 删除进了回收站:撤销只能提示用户去回收站还原 */
+  | { kind: 'trash'; items: CopyItem[]; at: number }
 
 interface FsState {
   ready: boolean
@@ -47,8 +107,12 @@ interface FsState {
   anchor: Record<string, string | undefined>
   renamingPath: string | null
   clipboard: { mode: 'copy' | 'cut'; entries: FileEntry[] } | null
-  op: { label: string; done: number; total: number } | null
+  op: OpState | null
+  /** 最近从回收站可还原的删除记录(持久化到 localStorage) */
+  recentDeleted: DeletedRecord[]
   undoStack: UndoOp[]
+  /** 撤销时压入的重做动作(闭包,不入会话持久化) */
+  redoStack: { run(): Promise<void> }[]
 
   init(): Promise<void>
   addRoot(): Promise<void>
@@ -60,6 +124,11 @@ interface FsState {
   newTab(path?: string): void
   closeTab(id: string): void
   setActive(id: string): void
+  jumpToTab(index: number): void
+  /** 拖拽重排:把 fromId 的标签移动到 toId 标签当前所在位置 */
+  moveTab(fromId: string, toId: string): void
+  nextTab(delta: number): void
+  openHome(): void
   navigate(path: string, tabId?: string): void
   goBack(): void
   goForward(): void
@@ -82,18 +151,71 @@ interface FsState {
 
   createEntry(kind: 'folder' | 'file'): void
   deleteSelection(): void
-  deletePaths(paths: string[], kinds: ('file' | 'directory')[]): Promise<void>
+  deletePaths(paths: string[], kinds: ('file' | 'directory')[], permanent?: boolean): Promise<void>
+  permanentDeleteSelection(): void
   copySelection(entries: FileEntry[]): void
   cutSelection(entries: FileEntry[]): void
   paste(): Promise<void>
   moveEntries(entries: FileEntry[], destDir: string): Promise<void>
   undo(): Promise<void>
+  redo(): Promise<void>
+  duplicateSelection(): Promise<void>
+
+  /** 取消当前进行中的文件操作(状态栏「取消」按钮调用) */
+  cancelOperation(): void
 
   setOp(op: FsState['op']): void
 }
 
 let tabSeq = 1
 const nextTabId = () => `t${tabSeq++}`
+
+/** 当前进行中操作的取消控制器(不入 state:不需要触发渲染) */
+let opAbort: AbortController | null = null
+/** 操作序号:并发收尾时只有最后一个作业有权清掉状态栏进度 */
+let opSeq = 0
+
+const RECENT_DELETED_KEY = 'mx-fm-recent-deleted'
+const RECENT_DELETED_MAX = 50
+
+function loadRecentDeleted(): DeletedRecord[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECENT_DELETED_KEY) || '[]')
+    return Array.isArray(raw) ? (raw as DeletedRecord[]).slice(0, RECENT_DELETED_MAX) : []
+  } catch {
+    return []
+  }
+}
+
+function persistRecentDeleted(list: DeletedRecord[]) {
+  try {
+    localStorage.setItem(RECENT_DELETED_KEY, JSON.stringify(list.slice(0, RECENT_DELETED_MAX)))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 记录可撤销操作;任何新操作都会使重做栈失效 */
+function pushUndoOp(op: UndoOp) {
+  useFs.setState({ undoStack: [...useFs.getState().undoStack, op].slice(-50), redoStack: [] })
+}
+
+/** 关闭标签页的实际执行(不带脏确认,供确认弹窗回调复用) */
+function actuallyCloseTab(id: string) {
+  const s = useFs.getState()
+  const idx = s.tabs.findIndex((t) => t.id === id)
+  if (idx === -1) return
+  const tabs = s.tabs.filter((t) => t.id !== id)
+  const listings = { ...s.listings }
+  const selection = { ...s.selection }
+  delete listings[id]
+  delete selection[id]
+  let activeId = s.activeId
+  if (activeId === id) activeId = tabs[Math.min(idx, tabs.length - 1)]?.id ?? ''
+  persistSession(tabs, activeId)
+  useFs.setState({ tabs, activeId, listings, selection })
+  void syncWatches()
+}
 
 /** 防止演示模式并发初始化(双击/重试)创建多个 provider 实例 */
 let demoLoading = false
@@ -164,6 +286,7 @@ async function loadDir(tabId: string) {
   try {
     const entries = await s.provider.list(path)
     useFs.setState({ listings: { ...useFs.getState().listings, [tabId]: { entries, loading: false } } })
+    void syncWatches()
   } catch (e) {
     useFs.setState({ listings: { ...useFs.getState().listings, [tabId]: { entries: [], loading: false } } })
     useUi.getState().toast(errToast(e), 'error')
@@ -209,27 +332,55 @@ export const useFs = create<FsState>()((set, get) => {
     const sameDir = entries.every((e) => parentOf(e.path) === destDir)
 
     const run = async (mode: ConflictMode) => {
-      const s2 = get()
-      s2.setOp({ label: move ? '移动中' : '复制中', done: 0, total: entries.length })
+      // 主进程同时只接受一个作业,第二个 opStart 会直接报 busy —— 这里提前拦下来更好定位
+      if (opAbort) {
+        ui().toast('已有文件操作正在进行,请先等待完成或取消', 'error')
+        return
+      }
+      const label = move ? '移动中' : '复制中'
+      const token = ++opSeq
+      const ac = new AbortController()
+      opAbort = ac
+      get().setOp({ label, done: 0, total: entries.length, canCancel: true })
+      const onBulkProgress = (p: BulkProgress) => {
+        const cur = get().op
+        if (!cur) return
+        set({
+          op: {
+            ...cur,
+            done: p.fileIndex,
+            total: p.fileCount,
+            bytesDone: p.bytesDone,
+            bytesTotal: p.bytesTotal,
+            currentName: p.currentName,
+          },
+        })
+      }
       try {
         const out = await copyEntries(provider, entries, destDir, {
           mode,
           move,
           sameDirCopy: sameDir && !move,
-          onProgress: (done, total) => get().setOp({ label: move ? '移动中' : '复制中', done, total }),
+          signal: ac.signal,
+          onBulkProgress,
+          onProgress: (done, total) => {
+            const cur = get().op
+            if (cur) set({ op: { ...cur, done, total } })
+          },
         })
         const n = out.created.length
-        ui().toast(
-          `${move ? '移动' : '复制'}完成:${n} 项${out.skipped ? `,跳过 ${out.skipped}` : ''}${out.overwritten ? `,覆盖 ${out.overwritten}` : ''}`,
-          'success'
-        )
+        const parts = [`${n} 项`]
+        if (out.skipped) parts.push(`跳过 ${out.skipped}`)
+        if (out.overwritten) parts.push(`覆盖 ${out.overwritten}`)
+        if (out.failed.length) parts.push(`失败 ${out.failed.length}:${out.failed[0]}`)
+        ui().toast(`${move ? '移动' : '复制'}完成:${parts.join(',')}`, out.failed.length ? 'error' : 'success')
         if (out.created.length) {
           const tab = activeTab()
           if (tab && tab.history[tab.idx] === destDir) {
             set({ selection: { ...get().selection, [tab.id]: out.created.map((c) => c.path) } })
           }
         }
-        if (out.overwritten === 0 && out.created.length) {
+        if (out.overwritten === 0 && out.failed.length === 0 && out.created.length) {
           const op: UndoOp = move
             ? {
                 kind: 'move',
@@ -237,13 +388,21 @@ export const useFs = create<FsState>()((set, get) => {
                   .map((r, i) => (r ? { created: r, source: { path: entries[i].path, kind: entries[i].kind } } : null))
                   .filter(Boolean) as { created: CopyItem; source: CopyItem }[],
               }
-            : { kind: 'paste', created: out.created }
-          set({ undoStack: [...get().undoStack, op].slice(-50) })
+            : {
+                kind: 'paste',
+                created: out.created,
+                sources: out.results
+                  .map((r, i) => (r ? { path: entries[i].path, kind: entries[i].kind } : null))
+                  .filter(Boolean) as CopyItem[],
+              }
+          pushUndoOp(op)
         }
       } catch (e) {
-        ui().toast(errToast(e), 'error')
+        if (isAbortError(e)) ui().toast('已取消操作', 'info')
+        else ui().toast(errToast(e), 'error')
       } finally {
-        get().setOp(null)
+        if (opAbort === ac) opAbort = null
+        if (opSeq === token) get().setOp(null)
         await get().refresh()
       }
     }
@@ -274,7 +433,9 @@ export const useFs = create<FsState>()((set, get) => {
     renamingPath: null,
     clipboard: null,
     op: null,
+    recentDeleted: loadRecentDeleted(),
     undoStack: [],
+    redoStack: [],
 
     async init() {
       // Android / iOS(Capacitor 壳)
@@ -463,6 +624,7 @@ export const useFs = create<FsState>()((set, get) => {
       const tabs = keepTabs.length ? keepTabs : []
       const activeId = tabs.some((t) => t.id === s.activeId) ? s.activeId : tabs[tabs.length - 1]?.id ?? ''
       set({ roots, tabs: withSession(tabs, activeId), activeId, listings, selection })
+      void syncWatches()
       if (activeId) await loadDir(activeId)
     },
 
@@ -493,16 +655,23 @@ export const useFs = create<FsState>()((set, get) => {
 
     closeTab(id) {
       const s = get()
-      const idx = s.tabs.findIndex((t) => t.id === id)
-      if (idx === -1) return
-      const tabs = s.tabs.filter((t) => t.id !== id)
-      const listings = { ...s.listings }
-      const selection = { ...s.selection }
-      delete listings[id]
-      delete selection[id]
-      let activeId = s.activeId
-      if (activeId === id) activeId = tabs[Math.min(idx, tabs.length - 1)]?.id ?? ''
-      set({ tabs: withSession(tabs, activeId), activeId, listings, selection })
+      const tab = s.tabs.find((t) => t.id === id)
+      if (!tab) return
+      if (tab.view?.dirty) {
+        ui().showDialog({
+          type: 'confirm',
+          title: '未保存的修改',
+          message: `「${tab.view.entry.name}」有未保存的修改,确定要关闭标签页吗?`,
+          danger: true,
+          okText: '放弃修改',
+          onOk: () => {
+            ui().closeDialog()
+            actuallyCloseTab(id)
+          },
+        })
+        return
+      }
+      actuallyCloseTab(id)
     },
 
     setActive(id) {
@@ -511,6 +680,39 @@ export const useFs = create<FsState>()((set, get) => {
       set({ activeId: id, selection: { ...s.selection, [id]: s.selection[id] ?? [] } })
       persistSession(get().tabs, id)
       if (!get().listings[id]) void loadDir(id)
+    },
+
+    jumpToTab(index) {
+      const t = get().tabs[index]
+      if (t) get().setActive(t.id)
+    },
+
+    /** 拖拽重排:把 fromId 的标签移动到 toId 标签当前所在位置 */
+    moveTab(fromId, toId) {
+      const s = get()
+      const from = s.tabs.findIndex((t) => t.id === fromId)
+      const to = s.tabs.findIndex((t) => t.id === toId)
+      if (from === -1 || to === -1 || from === to) return
+      const tabs = [...s.tabs]
+      const [moved] = tabs.splice(from, 1)
+      tabs.splice(to, 0, moved)
+      set({ tabs })
+      persistSession(tabs, s.activeId)
+    },
+
+    nextTab(delta) {
+      const s = get()
+      if (s.tabs.length < 2) return
+      const idx = s.tabs.findIndex((t) => t.id === s.activeId)
+      const next = s.tabs[(idx + delta + s.tabs.length) % s.tabs.length]
+      get().setActive(next.id)
+    },
+
+    /** 回主页:复用已有主页标签,没有则新建(与侧栏入口一致) */
+    openHome() {
+      const tab = activeTab()
+      if (tab && tab.history[tab.idx] === HOME_PATH) return
+      get().newTab(HOME_PATH)
     },
 
     navigate(path, tabId) {
@@ -690,7 +892,7 @@ export const useFs = create<FsState>()((set, get) => {
       try {
         const to = await s.provider!.rename(path, kind, newName)
         const op: UndoOp = { kind: 'rename', from: path, to, entryKind: kind }
-        set({ undoStack: [...s.undoStack, op].slice(-50) })
+        pushUndoOp(op)
         // 正在查看该文件时同步路径
         const tab = activeTab()
         if (tab?.view?.entry.path === path) {
@@ -732,7 +934,7 @@ export const useFs = create<FsState>()((set, get) => {
             if (isFolder) await s.provider!.mkdir(p)
             else await s.provider!.createFile(p)
             const op: UndoOp = { kind: 'create', target: { path: p, kind: isFolder ? 'directory' : 'file' } }
-            set({ undoStack: [...s.undoStack, op].slice(-50) })
+            pushUndoOp(op)
             await get().refresh()
             set({ selection: { ...get().selection, [tab.id]: [p] } })
           } catch (e) {
@@ -786,21 +988,80 @@ export const useFs = create<FsState>()((set, get) => {
       }
     },
 
-    async deletePaths(paths, kinds) {
+    permanentDeleteSelection() {
       const s = get()
-      s.setOp({ label: '删除中', done: 0, total: paths.length })
+      const tab = activeTab()
+      if (!tab) return
+      const sel = s.selection[tab.id] ?? []
+      if (!sel.length) return
+      const entries = (s.listings[tab.id]?.entries ?? []).filter((e) => sel.includes(e.path))
+      if (!entries.length) return
+      const doDelete = () => {
+        ui().closeDialog()
+        void get().deletePaths(
+          entries.map((e) => e.path),
+          entries.map((e) => e.kind),
+          true
+        )
+      }
+      ui().showDialog({
+        type: 'confirm',
+        title: '彻底删除',
+        message: `确定要彻底删除选中的 ${entries.length} 个项目吗?\n不经过回收站/废纸篓,此操作无法撤销。`,
+        danger: true,
+        okText: '彻底删除',
+        onOk: doDelete,
+      })
+    },
+
+    async deletePaths(paths, kinds, permanent = false) {
+      const s = get()
+      const provider = s.provider!
+      const label = permanent ? '彻底删除中' : '删除中'
+      const token = ++opSeq
+      s.setOp({ label, done: 0, total: paths.length, canCancel: false })
+      const trashed: CopyItem[] = []
       let ok = 0
       try {
         for (let i = 0; i < paths.length; i++) {
-          await s.provider!.remove(paths[i], kinds[i])
+          const r = await removeWithResult(provider, paths[i], kinds[i], permanent)
+          if (r.trashed) trashed.push({ path: paths[i], kind: kinds[i] })
           ok++
-          get().setOp({ label: '删除中', done: i + 1, total: paths.length })
+          const cur = get().op
+          if (cur) set({ op: { ...cur, done: i + 1 } })
         }
-        ui().toast(`已删除 ${ok} 个项目`, 'success')
+        // 进了回收站的删除可以「还原」:主进程没有回收站还原接口,
+        // 所以撤销只做提示,同时把记录写进 localStorage 供重启后查看最近删除。
+        if (trashed.length) {
+          const at = Date.now()
+          const records: DeletedRecord[] = trashed.map((it) => ({
+            path: it.path,
+            name: baseName(it.path),
+            kind: it.kind,
+            at,
+            trashed: true,
+          }))
+          const next = [...records, ...get().recentDeleted].slice(0, RECENT_DELETED_MAX)
+          set({ recentDeleted: next })
+          persistRecentDeleted(next)
+          pushUndoOp({ kind: 'trash', items: trashed, at })
+        }
+        ui().toast(
+          trashed.length
+            ? `已删除 ${ok} 个项目(已移入回收站,可在回收站中还原)`
+            : `已删除 ${ok} 个项目`,
+          'success'
+        )
       } catch (e) {
-        ui().toast(errToast(e), 'error')
+        // 主进程 fs:remove 失败会直接 throw(不再静默永久删除),这里如实告知
+        ui().toast(
+          permanent
+            ? errToast(e)
+            : `此位置不支持回收站,未执行删除(${errToast(e)})`,
+          'error'
+        )
       } finally {
-        get().setOp(null)
+        if (opSeq === token) get().setOp(null)
         // 正在查看被删除的文件则关闭查看器
         const tab = activeTab()
         if (tab?.view && paths.includes(tab.view.entry.path)) get().closeView()
@@ -812,28 +1073,84 @@ export const useFs = create<FsState>()((set, get) => {
       if (!entries.length) return
       set({ clipboard: { mode: 'copy', entries } })
       ui().toast(`已复制 ${entries.length} 个项目`)
+      writeSystemClipboard(entries, false)
     },
 
     cutSelection(entries) {
       if (!entries.length) return
       set({ clipboard: { mode: 'cut', entries } })
       ui().toast(`已剪切 ${entries.length} 个项目`)
+      writeSystemClipboard(entries, true)
     },
 
     async paste() {
       const s = get()
       const tab = activeTab()
-      if (!tab || !s.clipboard) return
+      if (!tab) return
       const destDir = tab.history[tab.idx]
-      const clip = s.clipboard
-      // 同目录剪切 = 无操作;同目录复制 = 生成副本(交给冲突流程重命名)
-      if (clip.mode === 'cut' && clip.entries.every((e) => parentOf(e.path) === destDir)) {
-        ui().toast('源和目标是同一个文件夹', 'info')
-        set({ clipboard: null })
+      if (s.clipboard) {
+        const clip = s.clipboard
+        // 同目录剪切 = 无操作;同目录复制 = 生成副本(交给冲突流程重命名)
+        if (clip.mode === 'cut' && clip.entries.every((e) => parentOf(e.path) === destDir)) {
+          ui().toast('源和目标是同一个文件夹', 'info')
+          set({ clipboard: null })
+          return
+        }
+        await runConflictAware(clip.entries, destDir, clip.mode === 'cut')
+        if (clip.mode === 'cut') set({ clipboard: null })
         return
       }
-      await runConflictAware(clip.entries, destDir, clip.mode === 'cut')
-      if (clip.mode === 'cut') set({ clipboard: null })
+      // 应用内剪贴板为空:尝试系统剪贴板(仅桌面版且目标是真实目录)
+      if (s.provider?.kind !== 'native' || destDir === HOME_PATH) {
+        ui().toast('剪贴板是空的', 'info')
+        return
+      }
+      const extras = nativeExtras()
+      if (!extras) {
+        ui().toast('剪贴板是空的', 'info')
+        return
+      }
+      let clip: { paths: string[]; cut: boolean } | null = null
+      try {
+        clip = await extras.clipRead()
+      } catch {
+        clip = null
+      }
+      if (!clip || !clip.paths.length) {
+        ui().toast('剪贴板是空的', 'info')
+        return
+      }
+      const ep = s.provider as ElectronProvider
+      // 本机路径 → 虚拟路径,并按父目录分组 list 一次拿到 kind/size(顺带过滤已不存在的路径)
+      const byParent = new Map<string, string[]>()
+      for (const np of clip.paths) {
+        try {
+          const vp = ep.toVirtualPath(np)
+          const parent = parentOf(vp)
+          const arr = byParent.get(parent)
+          if (arr) arr.push(vp)
+          else byParent.set(parent, [vp])
+        } catch {
+          /* 不在任何已挂载根内,跳过 */
+        }
+      }
+      const entries: FileEntry[] = []
+      for (const [parent, vps] of byParent) {
+        try {
+          const list = await s.provider.list(parent)
+          for (const vp of vps) {
+            const hit = list.find((e) => e.path === vp)
+            if (hit) entries.push(hit)
+          }
+        } catch {
+          /* 父目录已不可访问,跳过 */
+        }
+      }
+      if (!entries.length) {
+        ui().toast('剪贴板中没有可用的文件', 'info')
+        return
+      }
+      await runConflictAware(entries, destDir, clip.cut)
     },
 
     async moveEntries(entries, destDir) {
@@ -848,6 +1165,74 @@ export const useFs = create<FsState>()((set, get) => {
         ui().toast('没有可撤销的操作')
         return
       }
+      // 撤销成功后压入的反向动作;重做完成后把原操作放回撤销栈,撤销链保持连续
+      const pushBackUndo = () => set({ undoStack: [...get().undoStack, op].slice(-50) })
+      const redo: { run(): Promise<void> } = (() => {
+        const p = () => get().provider!
+        if (op.kind === 'create') {
+          return {
+            run: async () => {
+              if (op.target.kind === 'directory') await p().mkdir(op.target.path)
+              else await p().createFile(op.target.path)
+              pushBackUndo()
+            },
+          }
+        }
+        if (op.kind === 'rename') {
+          return {
+            run: async () => {
+              await p().rename(op.from, op.entryKind, baseName(op.to))
+              pushBackUndo()
+            },
+          }
+        }
+        if (op.kind === 'paste') {
+          return {
+            run: async () => {
+              for (let i = 0; i < op.created.length; i++) {
+                const src = op.sources[i]
+                if (!src) continue
+                const entry: FileEntry = {
+                  name: baseName(src.path),
+                  path: src.path,
+                  kind: src.kind,
+                  size: 0,
+                  modified: null,
+                  ext: '',
+                }
+                const destDir = parentOf(op.created[i].path)
+                const sameDir = destDir === parentOf(src.path)
+                await copyEntries(p(), [entry], destDir, sameDir ? { mode: 'keepBoth', sameDirCopy: true } : { mode: 'overwrite' })
+              }
+              pushBackUndo()
+            },
+          }
+        }
+        if (op.kind === 'trash') {
+          return {
+            run: async () => {
+              for (const it of op.items) await p().remove(it.path, it.kind)
+              pushBackUndo()
+            },
+          }
+        }
+        return {
+          run: async () => {
+            for (const pair of op.pairs) {
+              const entry: FileEntry = {
+                name: baseName(pair.source.path),
+                path: pair.source.path,
+                kind: pair.source.kind,
+                size: 0,
+                modified: null,
+                ext: '',
+              }
+              await copyEntries(p(), [entry], parentOf(pair.created.path), { mode: 'overwrite', move: true })
+            }
+            pushBackUndo()
+          },
+        }
+      })()
       try {
         if (op.kind === 'create') {
           await s.provider!.remove(op.target.path, op.target.kind)
@@ -868,12 +1253,54 @@ export const useFs = create<FsState>()((set, get) => {
             await copyEntries(s.provider!, [entry], parentOf(pair.source.path), { mode: 'overwrite', move: true })
           }
         }
-        set({ undoStack: s.undoStack.slice(0, -1) })
-        ui().toast('已撤销', 'success')
+        // trash 没有可用的还原接口,撤销只提示去回收站还原
+        const trashed = op.kind === 'trash'
+        set({
+          undoStack: s.undoStack.slice(0, -1),
+          redoStack: [...get().redoStack, redo].slice(-50),
+        })
+        ui().toast(trashed ? '文件已移入回收站,请从回收站还原' : '已撤销', trashed ? 'info' : 'success')
         await get().refresh()
       } catch (e) {
         ui().toast(errToast(e), 'error')
       }
+    },
+
+    async redo() {
+      const s = get()
+      const entry = s.redoStack[s.redoStack.length - 1]
+      if (!entry) {
+        ui().toast('没有可重做的操作')
+        return
+      }
+      try {
+        set({ redoStack: s.redoStack.slice(0, -1) })
+        await entry.run()
+        ui().toast('已重做', 'success')
+        await get().refresh()
+      } catch (e) {
+        ui().toast(errToast(e), 'error')
+      }
+    },
+
+    /** 复制副本:在原目录生成「名称 (2)」 */
+    async duplicateSelection() {
+      const s = get()
+      const tab = activeTab()
+      if (!tab) return
+      const sel = s.selection[tab.id] ?? []
+      if (sel.length !== 1) return
+      const entry = (s.listings[tab.id]?.entries ?? []).find((e) => e.path === sel[0])
+      if (!entry) return
+      await runConflictAware([entry], parentOf(entry.path), false)
+    },
+
+    cancelOperation() {
+      if (!get().op?.canCancel) return
+      opAbort?.abort()
+      opAbort = null
+      const cur = get().op
+      if (cur) set({ op: { ...cur, canCancel: false, label: '正在取消…' } })
     },
 
     setOp(op) {
@@ -881,6 +1308,139 @@ export const useFs = create<FsState>()((set, get) => {
     },
   }
 })
+
+/* ---------------- 系统剪贴板写入(随应用内复制/剪切同步) ---------------- */
+
+function writeSystemClipboard(entries: FileEntry[], cut: boolean) {
+  const s = useFs.getState()
+  if (s.provider?.kind !== 'native') return
+  const extras = nativeExtras()
+  if (!extras) return
+  const ep = s.provider as ElectronProvider
+  const paths: string[] = []
+  for (const e of entries) {
+    try {
+      paths.push(ep.toNativePath(e.path))
+    } catch {
+      /* 演示根等无本机路径,跳过 */
+    }
+  }
+  if (!paths.length) return
+  extras.clipWrite(paths, cut).catch(() => {})
+}
+
+/* ---------------- 目录实时监听(仅桌面版) ---------------- */
+
+/** 虚拟目录 → watchId,插入顺序即创建顺序(Map 保序,用于淘汰最旧) */
+const watchIds = new Map<string, number>()
+/** 防 watchStart 并发重复发起 */
+const watchPending = new Set<string>()
+const WATCH_MAX = 16
+
+/** 当前所有 tab 正在浏览的真实目录(HOME_PATH 除外) */
+function desiredWatchDirs(): Set<string> {
+  const s = useFs.getState()
+  if (s.provider?.kind !== 'native') return new Set()
+  return new Set(s.tabs.map((t) => t.history[t.idx]).filter((p) => p !== HOME_PATH))
+}
+
+/**
+ * 对账式同步:想让所有打开的 tab 目录都有 watch。
+ * - 不在期望集合里的旧 watch 停掉(导航离开/关标签/删根后清理)
+ * - 新目录 watchStart(同目录去重,含并发去重)
+ * - 超过 WATCH_MAX 时按创建顺序停最旧的
+ * loadDir 可能并发调用,靠 watchId 兜底:事件按 dir 匹配,不与具体 tab 强绑定。
+ */
+async function syncWatches() {
+  const s = useFs.getState()
+  if (s.provider?.kind !== 'native') return
+  const extras = nativeExtras()
+  if (!extras) return
+  const ep = s.provider as ElectronProvider
+  const want = desiredWatchDirs()
+
+  for (const [dir, id] of [...watchIds]) {
+    if (want.has(dir)) continue
+    watchIds.delete(dir)
+    extras.watchStop(id).catch(() => {})
+  }
+
+  for (const dir of want) {
+    if (watchIds.has(dir) || watchPending.has(dir)) continue
+    if (watchIds.size + watchPending.size >= WATCH_MAX) break
+    let nativeDir: string
+    try {
+      nativeDir = ep.toNativePath(dir)
+    } catch {
+      continue
+    }
+    watchPending.add(dir)
+    try {
+      const id = await extras.watchStart(nativeDir)
+      // await 期间目录可能已不期望/已有同目录 watch:立即停掉多余的
+      if (!want.has(dir) || watchIds.has(dir)) {
+        extras.watchStop(id).catch(() => {})
+      } else {
+        watchIds.set(dir, id)
+      }
+    } catch {
+      /* 目录可能已消失,忽略 */
+    } finally {
+      watchPending.delete(dir)
+    }
+  }
+
+  // 兜底淘汰(理论上 start 侧已限流)
+  while (watchIds.size > WATCH_MAX) {
+    const oldest = watchIds.keys().next().value
+    if (oldest === undefined) break
+    const id = watchIds.get(oldest)!
+    watchIds.delete(oldest)
+    extras.watchStop(id).catch(() => {})
+  }
+}
+
+// 模块级只订阅一次:回调内部按 provider 类型/批量操作状态自行过滤
+if (typeof window !== 'undefined') {
+  const extras = nativeExtras()
+  if (extras) {
+    extras.onFsChanged((ev) => {
+      const s = useFs.getState()
+      if (s.provider?.kind !== 'native') return
+      if (s.op) return // 批量操作进行中跳过,避免干扰进度
+      let vdir: string
+      try {
+        vdir = (s.provider as ElectronProvider).toVirtualPath(ev.dir)
+      } catch {
+        return
+      }
+      for (const t of s.tabs) {
+        if (t.history[t.idx] !== vdir) continue
+        if (s.listings[t.id]?.loading) continue // 已有刷新在途
+        void loadDir(t.id) // 只重载 listings,不动 selection/滚动
+      }
+    })
+    window.addEventListener('beforeunload', () => {
+      extras.watchStopAll().catch(() => {})
+    })
+  }
+}
+
+/** 在终端打开当前 tab 所在目录(桌面版,失败 toast) */
+function openTerminalHere() {
+  const s = useFs.getState()
+  const extras = nativeExtras()
+  const tab = s.tabs.find((t) => t.id === s.activeId)
+  const dir = tab ? tab.history[tab.idx] : ''
+  if (!extras || !dir || dir === HOME_PATH) return
+  try {
+    extras
+      .openInTerminal((s.provider as ElectronProvider).toNativePath(dir))
+      .catch((e: unknown) => useUi.getState().toast(String((e as Error).message || e), 'error'))
+  } catch (e) {
+    useUi.getState().toast(String((e as Error).message || e), 'error')
+  }
+}
 
 /** 供 FileList 的右键菜单使用:基于当前选择构造通用操作项 */
 export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
@@ -921,20 +1481,80 @@ export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
         },
       })
     }
+    if (nativeExtras()) {
+      items.push({ label: '在终端打开', onClick: openTerminalHere })
+    }
   }
   return items
 }
 
 export function buildEmptyMenuItems(): MenuItem[] {
   const s = useFs.getState()
-  return [
-    { label: '新建文件夹', onClick: () => s.createEntry('folder') },
-    { label: '新建文本文档', onClick: () => s.createEntry('file') },
+  const st = useSettings.getState()
+  const isNative = s.provider?.kind === 'native'
+  const check = (on: boolean) => (on ? '✓ ' : '')
+  const items: MenuItem[] = [
+    {
+      label: '新建',
+      children: [
+        { label: '文件夹', onClick: () => s.createEntry('folder') },
+        { label: '文本文档', onClick: () => s.createEntry('file') },
+      ],
+    },
+    {
+      label: '排序方式',
+      children: [
+        {
+          label: `${check(st.sortKey === 'name' && st.sortAsc)}名称`,
+          onClick: () => {
+            st.set('sortKey', 'name')
+            st.set('sortAsc', true)
+          },
+        },
+        {
+          label: `${check(st.sortKey === 'size' && !st.sortAsc)}大小`,
+          onClick: () => {
+            st.set('sortKey', 'size')
+            st.set('sortAsc', false)
+          },
+        },
+        {
+          label: `${check(st.sortKey === 'modified' && !st.sortAsc)}修改时间`,
+          onClick: () => {
+            st.set('sortKey', 'modified')
+            st.set('sortAsc', false)
+          },
+        },
+        {
+          label: `${check(st.sortKey === 'type' && st.sortAsc)}类型`,
+          onClick: () => {
+            st.set('sortKey', 'type')
+            st.set('sortAsc', true)
+          },
+        },
+        { sep: true },
+        { label: `${check(st.foldersFirst)}目录优先`, onClick: () => st.set('foldersFirst', !st.foldersFirst) },
+      ],
+    },
+    {
+      label: '显示',
+      children: [
+        { label: `${check(st.viewMode === 'details')}详细列表`, onClick: () => st.set('viewMode', 'details') },
+        { label: `${check(st.viewMode === 'grid')}大图标`, onClick: () => st.set('viewMode', 'grid') },
+        { sep: true },
+        { label: `${check(st.showHidden)}显示隐藏文件`, onClick: () => st.toggle('showHidden') },
+      ],
+    },
     { sep: true },
-    { label: '粘贴', disabled: !s.clipboard, onClick: () => void s.paste() },
+    // 桌面版应用内剪贴板为空时还能从系统剪贴板读,所以不按 s.clipboard 禁用
+    { label: '粘贴', disabled: !s.clipboard && !isNative, onClick: () => void s.paste() },
     { sep: true },
     { label: '刷新', onClick: () => void s.refresh() },
   ]
+  if (isNative && nativeExtras()) {
+    items.push({ label: '在终端打开', onClick: openTerminalHere })
+  }
+  return items
 }
 
 // 便于控制台调试

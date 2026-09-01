@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { FileEntry } from '../fs/types'
 import { categoryOf, type Category } from '../utils/categories'
+import { idbGet, idbSet } from '../fs/idb'
 
 /** 主页虚拟路径(@开头,不对应真实目录) */
 export const HOME_PATH = '@home'
@@ -79,28 +80,29 @@ interface ScanState {
   scan(): Promise<void>
 }
 
-const PERSIST_KEY = 'mx-fm-scan'
+const PERSIST_KEY = 'mx-fm-scan' // 旧版 localStorage key,仅用于一次性迁移
+const SCAN_IDB_KEY = 'scan-cache'
 
-function hydrate(): { lastScanAt: number | null; groups: Record<ScanGroup, CatResult> } {
-  try {
-    const raw = localStorage.getItem(PERSIST_KEY)
-    if (raw) {
-      const d = JSON.parse(raw)
-      if (d.groups) return { lastScanAt: d.lastScanAt ?? null, groups: { ...emptyGroups(), ...d.groups } }
-    }
-  } catch {
-    /* ignore */
-  }
-  return { lastScanAt: null, groups: emptyGroups() }
+interface PersistedScan {
+  lastScanAt: number | null
+  groups: Record<ScanGroup, CatResult>
 }
 
-const initial = hydrate()
+/** 防抖写入:扫描完成后 1s 内没有新扫描才落库(避免连续扫描反复写 idb) */
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+function persistScan(data: PersistedScan) {
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    void idbSet(SCAN_IDB_KEY, data).catch(() => {})
+  }, 1000)
+}
 
 export const useScan = create<ScanState>()((set, get) => ({
   running: false,
   scannedDirs: 0,
-  lastScanAt: initial.lastScanAt,
-  groups: initial.groups,
+  lastScanAt: null,
+  groups: emptyGroups(),
   openGroup: null,
   setOpenGroup: (g) => set({ openGroup: g }),
 
@@ -169,10 +171,33 @@ export const useScan = create<ScanState>()((set, get) => ({
     }
     const lastScanAt = Date.now()
     set({ running: false, scannedDirs: scanned, groups: { ...groups }, lastScanAt })
-    try {
-      localStorage.setItem(PERSIST_KEY, JSON.stringify({ lastScanAt, groups }))
-    } catch {
-      /* 容量超限等,忽略 */
-    }
+    persistScan({ lastScanAt, groups })
   },
 }))
+
+/** 异步恢复缓存(模块加载期不再同步 JSON.parse 大 JSON):idb 优先,旧 localStorage 数据一次性迁移后删除 */
+void (async () => {
+  try {
+    let d = await idbGet<PersistedScan>(SCAN_IDB_KEY)
+    if (!d) {
+      const raw = localStorage.getItem(PERSIST_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<PersistedScan> | null
+        if (parsed?.groups) {
+          d = { lastScanAt: parsed.lastScanAt ?? null, groups: parsed.groups as PersistedScan['groups'] }
+          void idbSet(SCAN_IDB_KEY, d).catch(() => {})
+        }
+        localStorage.removeItem(PERSIST_KEY)
+      }
+    }
+    // 恢复期间若已完成了一次新扫描(有 lastScanAt),以新数据为准
+    if (d?.groups) {
+      const cur = useScan.getState()
+      if (!cur.running && cur.lastScanAt === null) {
+        useScan.setState({ lastScanAt: d.lastScanAt ?? null, groups: { ...emptyGroups(), ...d.groups } })
+      }
+    }
+  } catch {
+    /* idb 不可用(隐私模式等),本次不恢复缓存 */
+  }
+})()

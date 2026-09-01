@@ -2,7 +2,6 @@ import type { FSProvider, FileEntry } from './types'
 import { joinPath, parentOf, baseName, segments, altName } from '../utils/path'
 import { extOf, mimeOf } from '../utils/format'
 import { moveEntry } from './ops'
-import * as XLSX from 'xlsx'
 import { zipSync, strToU8 } from 'fflate'
 
 interface MemNode {
@@ -207,7 +206,9 @@ function makeWav(): Uint8Array {
   return new Uint8Array(buf)
 }
 
-function makeXlsx(): Uint8Array {
+/** 演示 xlsx:动态 import,xlsx(约 430KB gz)不进首包 */
+async function makeXlsx(): Promise<Uint8Array> {
+  const XLSX = await import('xlsx')
   const wb = XLSX.utils.book_new()
   const sales = [
     ['月份', '产品', '数量', '单价', '金额'],
@@ -390,12 +391,13 @@ const SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" vi
 
 export async function buildDemoRoot(): Promise<MemNode> {
   const root = newDir('演示项目')
+  const xlsxBytes = await makeXlsx()
 
   const docs = newDir('文档')
   docs.children!.set('README.md', newFile('README.md', README_MD))
   docs.children!.set('会议纪要.txt', newFile('会议纪要.txt', '项目周会纪要\n\n时间:2026-08-28 10:00\n\n一、本周进展\n1. 文件浏览核心完成\n2. 内置查看器覆盖 12 类格式\n\n二、下周计划\n1. 性能优化(虚拟滚动压测)\n2. 首次引导页\n\n三、风险\n无。'))
   docs.children!.set('数据.csv', newFile('数据.csv', makeCsv(80)))
-  docs.children!.set('预算表.xlsx', newFile('预算表.xlsx', makeXlsx()))
+  docs.children!.set('预算表.xlsx', newFile('预算表.xlsx', xlsxBytes))
   docs.children!.set('项目介绍.docx', newFile('项目介绍.docx', makeDocx()))
   root.children!.set('文档', docs)
 

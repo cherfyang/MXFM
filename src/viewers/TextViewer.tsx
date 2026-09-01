@@ -10,9 +10,11 @@ import type { ViewerProps } from './registry'
 import { useFs } from '../stores/fs'
 import { useSettings, themeMeta } from '../stores/settings'
 import { useUi } from '../stores/ui'
-import { decodeSmart } from '../utils/format'
+import { decodeSmart, encodeSmart } from '../utils/format'
 
 const TEXT_LIMIT = 12 * 1024 * 1024
+/** 只读查看上限:超过则提示,仍可强制加载 */
+const READ_LIMIT = 64 * 1024 * 1024
 
 // 语言包全部懒加载,主包保持苗条
 const LANG_LOADERS: Record<string, () => Promise<LanguageSupport>> = {
@@ -138,6 +140,8 @@ export function TextViewer({ entry, readOnly, api }: ViewerProps) {
   const [doc, setDoc] = useState<string | null>(null)
   const [encoding, setEncoding] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [oversize, setOversize] = useState<number | null>(null)
+  const [forceLoad, setForceLoad] = useState(false)
   const savedTextRef = useRef<string | null>(null)
   const getTextRef = useRef<() => string>(() => '')
   const loading = doc === null && !error
@@ -146,6 +150,7 @@ export function TextViewer({ entry, readOnly, api }: ViewerProps) {
     let alive = true
     setDoc(null)
     setError(null)
+    setOversize(null)
     ;(async () => {
       try {
         const provider = useFs.getState().provider
@@ -153,6 +158,10 @@ export function TextViewer({ entry, readOnly, api }: ViewerProps) {
         const f = await provider.getFile(entry.path)
         if (f.size > TEXT_LIMIT && !readOnly) {
           if (alive) setError(`文件较大(${(f.size / 1024 / 1024).toFixed(1)} MB),超出编辑上限,请使用专门的编辑器打开`)
+          return
+        }
+        if (f.size > READ_LIMIT && !forceLoad) {
+          if (alive) setOversize(f.size)
           return
         }
         const bytes = new Uint8Array(await f.arrayBuffer())
@@ -171,7 +180,7 @@ export function TextViewer({ entry, readOnly, api }: ViewerProps) {
       api.registerSave(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry.path, entry.size, readOnly])
+  }, [entry.path, entry.size, readOnly, forceLoad])
 
   const hostRef = useCodeEditor({
     doc: doc ?? '',
@@ -189,8 +198,14 @@ export function TextViewer({ entry, readOnly, api }: ViewerProps) {
     try {
       const provider = useFs.getState().provider
       if (!provider) return
-      await provider.writeText(entry.path, getTextRef.current())
-      savedTextRef.current = getTextRef.current()
+      const text = getTextRef.current()
+      // 按检测到的原编码回写,避免 GBK/UTF-16 文件被静默转成 UTF-8
+      if (encoding === 'UTF-16LE' || encoding === 'UTF-16BE') {
+        await provider.writeBytes(entry.path, encodeSmart(text, encoding))
+      } else {
+        await provider.writeText(entry.path, text)
+      }
+      savedTextRef.current = text
       const f = await provider.getFile(entry.path)
       // 保存后刷新条目大小
       const s = useFs.getState()
@@ -237,6 +252,30 @@ export function TextViewer({ entry, readOnly, api }: ViewerProps) {
       </div>
     )
   }
+  if (oversize !== null) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-txt2">
+        <AlertTriangle className="h-8 w-8 text-amber-500" />
+        <div className="text-sm">
+          文件较大({(oversize / 1024 / 1024).toFixed(1)} MB),一次性加载可能造成卡顿
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setForceLoad(true)}
+            className="rounded-lg bg-acc px-4 py-1.5 text-sm text-white hover:opacity-90"
+          >
+            仍要加载
+          </button>
+          <button
+            onClick={() => useFs.getState().requestCloseView()}
+            className="rounded-lg bg-panel2 px-4 py-1.5 text-sm hover:opacity-80"
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    )
+  }
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-txt2">
@@ -249,7 +288,9 @@ export function TextViewer({ entry, readOnly, api }: ViewerProps) {
       <div ref={hostRef} className="cm-host h-full overflow-hidden" />
       {encoding && encoding !== 'UTF-8' && (
         <span className="absolute bottom-2 right-3 rounded bg-panel2 px-1.5 py-0.5 text-[10px] text-txt2">
-          检测到 {encoding} 编码,保存时将转为 UTF-8
+          {encoding.startsWith('UTF-16')
+            ? `检测到 ${encoding} 编码,将按原编码保存`
+            : `检测到 ${encoding} 编码,保存时将转为 UTF-8`}
         </span>
       )}
     </div>

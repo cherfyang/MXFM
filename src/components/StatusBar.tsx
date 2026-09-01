@@ -1,19 +1,31 @@
 import { useFs } from '../stores/fs'
+import { useSettings } from '../stores/settings'
 import { HOME_PATH } from '../stores/scan'
 
 export function StatusBar() {
   const s = useFs()
+  const showHidden = useSettings((st) => st.showHidden)
   const tab = s.tabs.find((t) => t.id === s.activeId)
   const listing = tab ? s.listings[tab.id] : undefined
   const sel = tab ? (s.selection[tab.id] ?? []) : []
-  const selEntries = (listing?.entries ?? []).filter((e) => sel.includes(e.path))
+  const entries = listing?.entries ?? []
+  // 与 FileList 相同的显示过滤(hidden + filter 子串),只计数不排序
+  let shown = entries
+  if (!showHidden) shown = shown.filter((e) => !e.name.startsWith('.'))
+  const f = (tab?.filter ?? '').trim().toLowerCase()
+  if (f) shown = shown.filter((e) => e.name.toLowerCase().includes(f))
+  const selEntries = entries.filter((e) => sel.includes(e.path))
   const selSize = selEntries.reduce((a, e) => a + (e.kind === 'file' ? e.size : 0), 0)
   const pct = s.op ? Math.round((s.op.done / Math.max(s.op.total, 1)) * 100) : 0
 
   return (
     <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-brd bg-panel px-3 text-xs text-txt2">
       <span>
-        {listing ? `${listing.entries.length} 个项目` : '—'}
+        {listing
+          ? shown.length !== entries.length
+            ? `显示 ${shown.length} 项(共 ${entries.length} 项)`
+            : `${entries.length} 个项目`
+          : '—'}
         {sel.length > 0 && ` · 选中 ${sel.length} 项`}
         {selSize > 0 && ` (${formatSize(selSize)})`}
       </span>

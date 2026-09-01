@@ -4,7 +4,7 @@ import { Loader2, AlertTriangle } from 'lucide-react'
 import type { ViewerProps } from './registry'
 import { useFs } from '../stores/fs'
 import { useUi } from '../stores/ui'
-import { fmtBytes } from '../utils/format'
+import { fmtBytes, decodeSmart } from '../utils/format'
 
 const SIZE_LIMIT = 30 * 1024 * 1024
 const COL_CAP = 256
@@ -119,7 +119,8 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
         const f = await provider.getFile(entry.path)
         if (f.size > SIZE_LIMIT) {
           if (alive) setError(`文件较大(${fmtBytes(f.size)}),仅支持预览前 30000 行,且不能编辑保存`)
-          const text = await f.slice(0, 4 * 1024 * 1024).text()
+          const head = new Uint8Array(await f.slice(0, 4 * 1024 * 1024).arrayBuffer())
+          const { text } = decodeSmart(head)
           const rows = parseCsv(text, sniffDelim(text)).slice(0, 30000)
           delimRef.current = sniffDelim(text)
           if (alive) {
@@ -128,7 +129,8 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
           }
           return
         }
-        const text = await f.text()
+        const bytes = new Uint8Array(await f.arrayBuffer())
+        const { text } = decodeSmart(bytes)
         const delim = sniffDelim(text)
         delimRef.current = delim
         const rows = parseCsv(text, delim)

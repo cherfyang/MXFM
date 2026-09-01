@@ -27,6 +27,21 @@ export function AudioViewer({ entry, nav }: ViewerProps) {
     setForced(false)
   }, [entry.path])
 
+  // 键盘 ↑↓ 调节音量
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+      e.preventDefault()
+      const next = Math.min(1, Math.max(0, +(vol + (e.key === 'ArrowUp' ? 0.1 : -0.1)).toFixed(2)))
+      setVol(next)
+      if (audioRef.current) audioRef.current.volume = next
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [vol])
+
   const toggle = () => {
     const a = audioRef.current
     if (!a) return

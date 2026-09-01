@@ -37,7 +37,16 @@ export interface MemoryDialog {
   type: 'memory'
 }
 
-export type DialogState = ConfirmDialog | PromptDialog | ConflictDialog | MemoryDialog
+export interface ShortcutsDialog {
+  type: 'shortcuts'
+}
+
+/** 回收站对话框(内容由 TrashDialog 组件渲染,store 只负责开关) */
+export interface TrashDialog {
+  type: 'trash'
+}
+
+export type DialogState = ConfirmDialog | PromptDialog | ConflictDialog | MemoryDialog | ShortcutsDialog | TrashDialog
 
 export type MenuItem =
   | { sep: true }
@@ -47,6 +56,8 @@ export type MenuItem =
       icon?: React.ReactNode
       danger?: boolean
       disabled?: boolean
+      /** 有子菜单时 onClick 可省略(渲染层负责展开) */
+      children?: MenuItem[]
       onClick?(): void
     }
 

@@ -16,3 +16,6 @@ android/.idea
 android/*.iml
 android/app/*.iml
 android/capacitor-cordova-android-plugins
+
+# workbuddy 工作区数据
+.workbuddy

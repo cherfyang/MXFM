@@ -1,8 +1,25 @@
+import { useState } from 'react'
 import { X, Plus } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { baseName } from '../utils/path'
 import { HOME_PATH } from '../stores/scan'
+import { getDragPayload } from './dnd'
 import { EntryIcon } from './Icons'
+
+/** 模块级拖拽状态(参照 dnd.ts 的共享 payload 风格):当前被拖动的 tab id */
+let dragTabId: string | null = null
+/** 文件拖拽悬停切换标签的定时器与目标 tab id */
+let switchTimer = 0
+let switchTarget: string | null = null
+const SWITCH_DELAY = 500
+
+function clearSwitchTimer() {
+  if (switchTimer) {
+    window.clearTimeout(switchTimer)
+    switchTimer = 0
+  }
+  switchTarget = null
+}
 
 export function TabsBar() {
   const tabs = useFs((s) => s.tabs)
@@ -10,25 +27,80 @@ export function TabsBar() {
   const setActive = useFs((s) => s.setActive)
   const closeTab = useFs((s) => s.closeTab)
   const newTab = useFs((s) => s.newTab)
+  const jumpToTab = useFs((s) => s.jumpToTab)
+  const moveTab = useFs((s) => s.moveTab)
+
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
 
   if (!tabs.length) return null
+
+  const endDrag = () => {
+    dragTabId = null
+    clearSwitchTimer()
+    setDraggingId(null)
+    setOverId(null)
+  }
 
   return (
     <div className="flex h-11 shrink-0 items-center gap-1 overflow-x-auto border-b border-brd bg-panel px-1.5 md:h-9 md:overflow-x-hidden">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-        {tabs.map((t) => {
+        {tabs.map((t, i) => {
           const active = t.id === activeId
           const title = t.history[t.idx] === HOME_PATH ? '主页' : baseName(t.history[t.idx]) || t.history[t.idx]
           return (
             <div
               key={t.id}
+              draggable
+              onDragStart={(e) => {
+                dragTabId = t.id
+                setDraggingId(t.id)
+                e.dataTransfer.effectAllowed = 'move'
+                e.dataTransfer.setData('text/plain', t.id)
+              }}
+              onDragEnd={endDrag}
+              onDragOver={(e) => {
+                if (dragTabId) {
+                  // 内部标签重排:高亮目标 tab
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                  setOverId((prev) => (prev === t.id ? prev : t.id))
+                  return
+                }
+                // 文件拖拽(系统文件或应用内拖拽):悬停 500ms 切到该 tab,为跨标签拖文件铺路
+                if (e.dataTransfer.types.includes('Files') || getDragPayload()) {
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                  if (switchTarget !== t.id) {
+                    clearSwitchTimer()
+                    switchTarget = t.id
+                    const idx = i
+                    switchTimer = window.setTimeout(() => {
+                      switchTimer = 0
+                      switchTarget = null
+                      jumpToTab(idx)
+                    }, SWITCH_DELAY)
+                  }
+                }
+              }}
+              onDragLeave={() => {
+                clearSwitchTimer()
+                setOverId(null)
+              }}
+              onDrop={(e) => {
+                if (!dragTabId) return // 外部文件拖拽不在这里处理,交给 FileList 兜底
+                e.preventDefault()
+                e.stopPropagation()
+                if (dragTabId !== t.id) moveTab(dragTabId, t.id)
+                endDrag()
+              }}
               onClick={() => setActive(t.id)}
               onAuxClick={(e) => {
                 if (e.button === 1) closeTab(t.id)
               }}
               className={`group flex h-9 max-w-44 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-[14px] md:h-7 md:px-2 md:text-[13px] transition-colors ${
                 active ? 'bg-app text-txt' : 'text-txt2 hover:bg-hover'
-              }`}
+              } ${draggingId === t.id ? 'opacity-50' : ''} ${overId === t.id ? 'ring-1 ring-acc' : ''}`}
               title={t.history[t.idx]}
             >
               <EntryIcon category="folder" className="h-3.5 w-3.5" />

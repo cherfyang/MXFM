@@ -39,6 +39,8 @@ export interface FSProvider {
   mkdir(path: string): Promise<void>
   createFile(path: string): Promise<void>
   remove(path: string, kind: 'file' | 'directory'): Promise<void>
+  /** 桌面版:彻底删除(不进回收站/废纸篓);浏览器与内存实现本就是彻底删除,可不提供 */
+  removePermanent?(path: string, kind: 'file' | 'directory'): Promise<void>
   rename(path: string, kind: 'file' | 'directory', newName: string): Promise<string>
   exists(path: string): Promise<boolean>
   uniqueName(dir: string, name: string): Promise<string>

@@ -85,14 +85,30 @@ export function XlsxViewer({ entry, readOnly, api }: ViewerProps) {
     overscan: 20,
   })
 
+  /** 原扩展名 → SheetJS 写出类型;不在表内说明不能按原格式写回,防止产生"xlsx 内容 + 错误扩展名"的坏文件 */
+  const BOOKTYPE_BY_EXT: Record<string, XLSX.BookType> = {
+    xlsx: 'xlsx',
+    xlsm: 'xlsm',
+    xls: 'xls',
+    ods: 'ods',
+    csv: 'csv',
+    dif: 'dif',
+    sylk: 'sylk',
+  }
+
   const doSave = async () => {
     if (!wb) return
+    const bookType = BOOKTYPE_BY_EXT[entry.ext]
+    if (!bookType) {
+      useUi.getState().toast(`.${entry.ext} 不支持原地保存,请用系统程序另存为 .xlsx`, 'error')
+      return
+    }
     try {
       const provider = useFs.getState().provider!
-      const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+      const out = XLSX.write(wb, { bookType, type: 'array' })
       await provider.writeBytes(entry.path, new Uint8Array(out))
       api.setDirty(false)
-      useUi.getState().toast('Excel 已保存(样式与公式可能丢失)', 'success')
+      useUi.getState().toast(`Excel 已按 .${entry.ext} 保存(样式与公式可能丢失)`, 'success')
     } catch (e) {
       useUi.getState().toast(e instanceof Error ? e.message : String(e), 'error')
     }

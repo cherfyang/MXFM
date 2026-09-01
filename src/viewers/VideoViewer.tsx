@@ -11,11 +11,15 @@ import {
   Repeat,
   Loader2,
   AlertTriangle,
+  Subtitles,
 } from 'lucide-react'
 import type { ViewerProps } from './registry'
 import { useBlobUrl } from './registry'
 import { fmtTime } from './playerUtil'
 import { TranscodeOverlay, VIDEO_NEED_TRANSCODE, transcodeAvailable } from './TranscodeOverlay'
+import { srtToVtt } from './subtitle'
+import { parentOf } from '../utils/path'
+import { useFs } from '../stores/fs'
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
@@ -37,6 +41,10 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
   const hideTimer = useRef<number | null>(null)
   const [overrideUrl, setOverrideUrl] = useState<string | null>(null)
   const [forcedTranscode, setForcedTranscode] = useState(false)
+  // 外挂字幕:blob URL + 开关 + .ass 提示
+  const [subUrl, setSubUrl] = useState<string | null>(null)
+  const [subOn, setSubOn] = useState(true)
+  const [assHint, setAssHint] = useState(false)
 
   const posKey = `mx-vp:${entry.path}`
 
@@ -47,6 +55,46 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
     setDuration(0)
     setOverrideUrl(null)
     setForcedTranscode(false)
+    setSubOn(true)
+  }, [entry.path])
+
+  // 同目录找外挂字幕:同名 .vtt > 同名 .srt > 目录内唯一的 .vtt/.srt
+  useEffect(() => {
+    let alive = true
+    let blobUrl: string | null = null
+    setSubUrl(null)
+    setAssHint(false)
+    ;(async () => {
+      try {
+        const provider = useFs.getState().provider
+        if (!provider) return
+        const siblings = await provider.list(parentOf(entry.path))
+        if (!alive) return
+        const files = siblings.filter((e) => e.kind === 'file')
+        const stem = entry.name.replace(/\.[^.]+$/, '').toLowerCase()
+        const sameName = (ext: string) => files.find((f) => f.name.toLowerCase() === `${stem}.${ext}`)
+        const onlyOne = (ext: string) => {
+          const hits = files.filter((f) => f.name.toLowerCase().endsWith(`.${ext}`))
+          return hits.length === 1 ? hits[0] : undefined
+        }
+        const pick = sameName('vtt') ?? sameName('srt') ?? onlyOne('vtt') ?? onlyOne('srt')
+        if (pick) {
+          const raw = await (await provider.getFile(pick.path)).text()
+          if (!alive) return
+          const vtt = pick.name.toLowerCase().endsWith('.vtt') ? raw.replace(/^\uFEFF/, '') : srtToVtt(raw)
+          blobUrl = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }))
+          if (alive) setSubUrl(blobUrl)
+        } else if (sameName('ass') || sameName('ssa')) {
+          if (alive) setAssHint(true)
+        }
+      } catch {
+        /* list 失败(权限等)静默跳过,不影响播放 */
+      }
+    })()
+    return () => {
+      alive = false
+      if (blobUrl) URL.revokeObjectURL(blobUrl)
+    }
   }, [entry.path])
 
   useEffect(() => {
@@ -80,6 +128,30 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, ready])
+
+  // 挂载字幕 track:手动 createElement 追加(JSX 动态 <track> 在部分内核不触发加载,手动插入时机可控);
+  // src 来源(原始 blob/流式 URL 或转码输出 URL)无关,video 元素出现即可挂
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v || !subUrl) return
+    const el = document.createElement('track')
+    el.kind = 'subtitles'
+    el.label = '字幕'
+    el.srclang = 'zh'
+    el.default = true
+    el.src = subUrl
+    v.appendChild(el)
+    const sync = () => {
+      if (v.textTracks[0]) v.textTracks[0].mode = subOn ? 'showing' : 'hidden'
+    }
+    el.addEventListener('load', sync)
+    sync()
+    return () => {
+      el.removeEventListener('load', sync)
+      el.remove()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subUrl, url, overrideUrl, subOn])
 
   const scheduleHide = () => {
     if (hideTimer.current) window.clearTimeout(hideTimer.current)
@@ -248,6 +320,12 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
         </div>
       )}
 
+      {assHint && (
+        <div className="absolute right-3 top-3 z-10 rounded-md bg-black/60 px-2 py-1 text-xs text-white/85">
+          检测到 .ass/.ssa 字幕,暂不支持
+        </div>
+      )}
+
       {err && !showTranscode && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 text-center text-txt">
           <AlertTriangle className="h-8 w-8 text-amber-400" />
@@ -303,6 +381,15 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
           <button onClick={() => setLoop((l) => !l)} className={`rounded p-1 hover:bg-white/15 ${loop ? 'text-acc' : ''}`} title="循环播放">
             <Repeat className="h-4.5 w-4.5" />
           </button>
+          {subUrl && (
+            <button
+              onClick={() => setSubOn((s) => !s)}
+              className={`rounded p-1 hover:bg-white/15 ${subOn ? 'text-acc' : 'text-white/50'}`}
+              title="字幕开关"
+            >
+              <Subtitles className="h-4.5 w-4.5" />
+            </button>
+          )}
           <button
             onClick={() => {
               const v = videoRef.current

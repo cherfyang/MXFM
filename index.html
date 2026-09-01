@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%233574f0'%3E%3Cpath d='M4 4h6l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z'/%3E%3C/svg%3E" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <!--
+      CSP 说明(生产 + Vite dev server 同时满足):
+      - mxfile: / blob: / data: 用于本地文件预览(视频/音频走 mxfile:// 流式协议,图片走 data:/blob:)
+      - script-src 'unsafe-inline' + 'unsafe-eval':
+          * 生产是打包后的静态资源,'unsafe-inline' 是为了覆盖内联 <script> 与部分查看器
+            (pdfjs-dist / epubjs / docx-preview)运行时注入的样式与内联脚本;
+          * 'unsafe-eval' 是 Vite 开发服务器(HMR 客户端用 eval 注入模块)与 react-refresh 所必需,
+            生产构建本身不需要,去掉会导致开发模式白屏。
+      - connect-src 的 ws: / wss: 是 Vite HMR 的 WebSocket 通道(dev 下连 ws://localhost:5188);
+        mxfile: / blob: / data: 供 fetch/XHR 读取本地文件与转码产物。
+      - worker-src 'self' blob::pdfjs-dist 以 blob worker 形式加载,pdf 预览依赖它。
+      - 未加 object-src / frame-src:本项目不使用 <object>/<embed>/<iframe>,
+        由 default-src 'self' 兜底。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' mxfile: blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' mxfile: blob: data:; media-src 'self' mxfile: blob:; font-src 'self' data:; connect-src 'self' ws: wss: mxfile: blob: data:; worker-src 'self' blob:;"
+    />
     <title>MX 文件管理器</title>
   </head>
   <body>

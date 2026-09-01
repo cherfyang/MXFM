@@ -189,8 +189,11 @@ export function FileList() {
     onTouchMove: lpClear,
     onTouchEnd: lpClear,
     onDragOver: (e: React.DragEvent) => {
-      if (getDragPayload()) e.preventDefault()
-      setDropping(true)
+      // 外部文件/文件夹拖入必须 preventDefault 才能触发 drop(修复"外部拖入完全不可用")
+      const hasInternal = !!getDragPayload()
+      const hasExternal = Array.from(e.dataTransfer.types).includes('Files')
+      if (hasInternal || hasExternal) e.preventDefault()
+      setDropping(hasInternal || hasExternal)
     },
     onDragLeave: (e: React.DragEvent) => {
       if (e.target === scrollRef.current) setDropping(false)

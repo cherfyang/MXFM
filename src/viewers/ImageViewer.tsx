@@ -65,6 +65,7 @@ export function ImageViewer({ entry, nav }: ViewerProps) {
   const [rot, setRot] = useState(0)
   const [flip, setFlip] = useState(false)
   const [err, setErr] = useState(false)
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null)
   const imgRef = useRef<HTMLImageElement>(null)
 
   useEffect(() => {
@@ -72,10 +73,21 @@ export function ImageViewer({ entry, nav }: ViewerProps) {
     setRot(0)
     setFlip(false)
     setErr(false)
+    setDims(null)
     setEditorOpen(false)
   }, [entry.path])
 
   const zoom = (d: number) => setScale((s) => Math.min(8, Math.max(0.1, +(s * d).toFixed(3))))
+  const readDims = () => {
+    const im = imgRef.current
+    if (im && im.naturalWidth) setDims((d) => d ?? { w: im.naturalWidth, h: im.naturalHeight })
+  }
+  const scaled = (n: number) => Math.max(1, Math.round(n * scale))
+  const swapped = rot % 180 !== 0
+  // 显式尺寸模式:缩放/旋转时用真实布局尺寸替代 transform scale,让 overflow 滚动条生效(修复放大后无法平移)
+  const explicit = dims !== null && (scale !== 1 || swapped)
+  const boxW = dims ? (swapped ? scaled(dims.h) : scaled(dims.w)) : 0
+  const boxH = dims ? (swapped ? scaled(dims.w) : scaled(dims.h)) : 0
 
   // Ctrl+滚轮缩放
   const onWheel = (e: React.WheelEvent) => {
@@ -84,17 +96,28 @@ export function ImageViewer({ entry, nav }: ViewerProps) {
     zoom(e.deltaY < 0 ? 1.15 : 1 / 1.15)
   }
 
-  // 键盘左右切换
+  // 键盘:左右切换,+/−/0 缩放,R 旋转
   useEffect(() => {
-    if (!nav) return
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement
-      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
-      if (e.key === 'ArrowLeft') nav.onNav(-1)
-      if (e.key === 'ArrowRight') nav.onNav(1)
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
+      if (e.key === 'ArrowLeft' && nav) nav.onNav(-1)
+      else if (e.key === 'ArrowRight' && nav) nav.onNav(1)
+      else if (e.key === '+' || e.key === '=') zoom(1.25)
+      else if (e.key === '-' || e.key === '_') zoom(1 / 1.25)
+      else if (e.key === '0') {
+        setScale(1)
+        setRot(0)
+        setFlip(false)
+      } else if (e.key === 'r' || e.key === 'R') {
+        // R 顺时针,Shift+R 逆时针
+        setRot((r) => (((r + (e.shiftKey ? -90 : 90)) % 360) + 360) % 360)
+      } else return
+      e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nav])
 
   const saveCopy = async () => {
@@ -111,7 +134,12 @@ export function ImageViewer({ entry, nav }: ViewerProps) {
       ctx.scale(flip ? -1 : 1, 1)
       ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2)
       const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'))
-      if (!blob) return
+      if (!blob) {
+        useUi
+          .getState()
+          .toast('图片过大,超出浏览器画布上限,另存失败(可先缩小/裁剪后再试)', 'error')
+        return
+      }
       const s = useFs.getState()
       const provider = s.provider!
       const dot = entry.name.lastIndexOf('.')
@@ -209,20 +237,43 @@ export function ImageViewer({ entry, nav }: ViewerProps) {
           </div>
         ) : (
           <div className="flex min-h-full min-w-full items-center justify-center p-6">
-            <img
-              ref={imgRef}
-              src={url}
-              alt={entry.name}
-              onError={() => setErr(true)}
-              draggable={false}
-              className="max-h-none shadow-lg"
-              style={{
-                transform: `scale(${scale}) rotate(${rot}deg) scaleX(${flip ? -1 : 1})`,
-                transition: 'transform 0.12s ease-out',
-                maxHeight: scale === 1 && rot % 180 === 0 ? 'calc(100vh - 220px)' : 'none',
-                maxWidth: scale === 1 ? '100%' : 'none',
-              }}
-            />
+            {explicit ? (
+              <div style={{ width: boxW, height: boxH, position: 'relative', flex: 'none' }}>
+                <img
+                  ref={imgRef}
+                  src={url}
+                  alt={entry.name}
+                  onError={() => setErr(true)}
+                  onLoad={readDims}
+                  draggable={false}
+                  className="shadow-lg"
+                  style={{
+                    position: 'absolute',
+                    left: '50%',
+                    top: '50%',
+                    width: scaled(dims!.w),
+                    height: scaled(dims!.h),
+                    transform: `translate(-50%, -50%) rotate(${rot}deg) scaleX(${flip ? -1 : 1})`,
+                  }}
+                />
+              </div>
+            ) : (
+              <img
+                ref={imgRef}
+                src={url}
+                alt={entry.name}
+                onError={() => setErr(true)}
+                onLoad={readDims}
+                draggable={false}
+                className="max-h-none shadow-lg"
+                style={{
+                  transform: `rotate(${rot}deg) scaleX(${flip ? -1 : 1})`,
+                  transition: 'transform 0.12s ease-out',
+                  maxHeight: rot % 180 === 0 ? 'calc(100vh - 220px)' : 'none',
+                  maxWidth: '100%',
+                }}
+              />
+            )}
           </div>
         )}
       </div>

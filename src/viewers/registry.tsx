@@ -1,23 +1,31 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ChevronLeft, ChevronRight, Save, ExternalLink } from 'lucide-react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, ChevronLeft, ChevronRight, Save, ExternalLink, Loader2 } from 'lucide-react'
 import { useFs, registerSaveFn, type ViewedFile } from '../stores/fs'
 import { categoryOf, EDITABLE_CATEGORIES, type Category } from '../utils/categories'
-import { looksLikeText, fmtBytes } from '../utils/format'
+import { looksLikeText, fmtBytes, extOf } from '../utils/format'
+import { needsImageDecode } from '../utils/imageDecode'
 import { EntryIcon } from '../components/Icons'
 import { IconBtn } from '../components/ui'
 import type { FileEntry } from '../fs/types'
-import { TextViewer } from './TextViewer'
-import { MarkdownViewer } from './MarkdownViewer'
-import { ImageViewer } from './ImageViewer'
-import { VideoViewer } from './VideoViewer'
-import { AudioViewer } from './AudioViewer'
-import { PdfViewer } from './PdfViewer'
-import { CsvViewer } from './CsvViewer'
-import { XlsxViewer } from './XlsxViewer'
-import { DocxViewer } from './DocxViewer'
-import { ZipViewer } from './ZipViewer'
-import { EpubViewer } from './EpubViewer'
 import { HexViewer } from './HexViewer'
+
+// 查看器全部懒加载:CodeMirror/xlsx/docx-preview/markdown-it 等重组件不进首包
+// HexViewer 极小且是未知格式兜底,保持同步可用
+const lazyOf = (load: () => Promise<{ default?: unknown } & Record<string, unknown>>, name: string) =>
+  lazy(() =>
+    load().then((m) => ({ default: (m[name] ?? m.default) as React.ComponentType<ViewerProps> }))
+  )
+const TextViewer = lazyOf(() => import('./TextViewer'), 'TextViewer')
+const MarkdownViewer = lazyOf(() => import('./MarkdownViewer'), 'MarkdownViewer')
+const ImageViewer = lazyOf(() => import('./ImageViewer'), 'ImageViewer')
+const VideoViewer = lazyOf(() => import('./VideoViewer'), 'VideoViewer')
+const AudioViewer = lazyOf(() => import('./AudioViewer'), 'AudioViewer')
+const PdfViewer = lazyOf(() => import('./PdfViewer'), 'PdfViewer')
+const CsvViewer = lazyOf(() => import('./CsvViewer'), 'CsvViewer')
+const XlsxViewer = lazyOf(() => import('./XlsxViewer'), 'XlsxViewer')
+const DocxViewer = lazyOf(() => import('./DocxViewer'), 'DocxViewer')
+const ZipViewer = lazyOf(() => import('./ZipViewer'), 'ZipViewer')
+const EpubViewer = lazyOf(() => import('./EpubViewer'), 'EpubViewer')
 
 export interface ViewerApi {
   setDirty(dirty: boolean): void
@@ -217,7 +225,15 @@ export function ViewerHost({
         </div>
       )}
       <div className="min-h-0 flex-1">
-        <Comp entry={entry} readOnly={readOnly || !editable} api={api} nav={nav} />
+        <Suspense
+          fallback={
+            <div className="flex h-full items-center justify-center text-txt2">
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 加载查看器…
+            </div>
+          }
+        >
+          <Comp entry={entry} readOnly={readOnly || !editable} api={api} nav={nav} />
+        </Suspense>
       </div>
     </div>
   )
@@ -247,8 +263,10 @@ export function useBlobUrl(entry: FileEntry | null): string | null {
       return
     }
     const provider = useFs.getState().provider
+    // tiff/heic/psd 必须走解码器(Chromium 原生不支持,mxfile:// 直连会白屏)
+    const needDecode = needsImageDecode(extOf(entry.name))
     // 桌面版:直接用自定义协议流式访问,大视频不占内存
-    const media = provider?.mediaUrl?.(entry.path)
+    const media = needDecode ? undefined : provider?.mediaUrl?.(entry.path)
     if (media) {
       setUrl(media)
       return

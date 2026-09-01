@@ -153,7 +153,8 @@ export class FsaProvider implements FSProvider {
     if (this.isMem(path)) return this.mem.rename(path, kind, newName)
     const parent = parentOf(path)
     const target = joinPath(parent, newName)
-    if (await this.exists(target)) throw new Error('目标位置已存在同名项目')
+    // 仅大小写不同时不算冲突(部分后端是大小写不敏感的,exists 命中的就是自己)
+    if (target !== path && (await this.exists(target))) throw new Error('目标位置已存在同名项目')
     const entry: FileEntry = { name: baseName(path), path, kind, size: 0, modified: null, ext: extOf(baseName(path)) }
     await moveEntry(this, entry, target)
     for (const key of [...this.dirCache.keys()]) {

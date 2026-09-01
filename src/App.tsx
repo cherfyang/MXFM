@@ -3,7 +3,7 @@ import { FolderPlus, MonitorPlay, FolderOpen } from 'lucide-react'
 import { useFs } from './stores/fs'
 import { useSettings } from './stores/settings'
 import { useUi } from './stores/ui'
-import { Toolbar } from './components/Toolbar'
+import { Toolbar, openMoreMenu } from './components/Toolbar'
 import { Sidebar } from './components/Sidebar'
 import { TabsBar } from './components/TabsBar'
 import { FileList } from './components/FileList'
@@ -54,6 +54,10 @@ export default function App() {
       if (action === 'newFolder') s2.createEntry('folder')
       else if (action === 'newFile') s2.createEntry('file')
       else if (action === 'refresh') void s2.refresh()
+      else if (action === 'closeTab') {
+        if (s2.activeId) s2.closeTab(s2.activeId)
+      } else if (action === 'nextTab') s2.nextTab(1)
+      else if (action === 'prevTab') s2.nextTab(-1)
     })
   }, [])
 
@@ -69,6 +73,26 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [])
 
+  // 浏览器版:拦截窗口级拖放,防止文件被拖到列表外区域时被浏览器直接打开
+  useEffect(() => {
+    const isFileDrag = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+    const onDragOver = (e: DragEvent) => {
+      if (isFileDrag(e)) e.preventDefault()
+    }
+    const onDrop = (e: DragEvent) => {
+      // FileList 自身已处理放置;这里只兜底拦截其它区域的浏览器默认行为(打开文件/导航)
+      if (isFileDrag(e)) {
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('drop', onDrop)
+    return () => {
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('drop', onDrop)
+    }
+  }, [])
+
   // 全局快捷键
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -81,6 +105,11 @@ export default function App() {
       const tab = s.tabs.find((x) => x.id === s.activeId)
 
       if (e.key === 'Escape') {
+        // 全屏(视频 F 键)时 Esc 只退出全屏,不关查看器
+        if (document.fullscreenElement) {
+          void document.exitFullscreen()
+          return
+        }
         if (ui.menu) {
           ui.closeMenu()
           return
@@ -132,6 +161,67 @@ export default function App() {
         }
         return
       }
+      // 重做:Ctrl/Cmd+Shift+Z,Windows 另支持 Ctrl+Y(编辑态由 CodeMirror 自行处理)
+      if (((mod && e.shiftKey && e.key.toLowerCase() === 'z') || (e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'y')) && !tab.view) {
+        e.preventDefault()
+        void s.redo()
+        return
+      }
+      if (mod && e.key === ',') {
+        e.preventDefault()
+        openMoreMenu()
+        return
+      }
+      if (mod && e.key.toLowerCase() === 'd' && !tab.view) {
+        e.preventDefault()
+        void s.duplicateSelection()
+        return
+      }
+      if (mod && e.key.toLowerCase() === 'o' && !tab.view && single) {
+        e.preventDefault()
+        const p = s.provider as unknown as { openInSystem?(path: string): Promise<void> } | null
+        if (p?.openInSystem) p.openInSystem(single.path).catch((er) => useUi.getState().toast(String((er as Error).message || er), 'error'))
+        return
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'r' && !tab.view && single) {
+        e.preventDefault()
+        const p = s.provider as unknown as { reveal?(path: string): Promise<void> } | null
+        if (p?.reveal) p.reveal(single.path).catch((er) => useUi.getState().toast(String((er as Error).message || er), 'error'))
+        return
+      }
+      if (e.key === '?' && !mod && !e.altKey) {
+        e.preventDefault()
+        ui.showDialog({ type: 'shortcuts' })
+        return
+      }
+      if (mod && e.key.toLowerCase() === 'l') {
+        e.preventDefault()
+        window.dispatchEvent(new CustomEvent('mx-edit-path'))
+        return
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'g' && !editable) {
+        e.preventDefault()
+        window.dispatchEvent(new CustomEvent('mx-edit-path'))
+        return
+      }
+      // Alt+Home / ⌘⇧H 回主页
+      if ((e.altKey && e.key === 'Home') || (mod && e.shiftKey && e.key.toLowerCase() === 'h')) {
+        e.preventDefault()
+        s.openHome()
+        return
+      }
+      // Ctrl/Cmd+W 关闭标签页;菜单加速器拦截时会走 menu-action,这里兜底(浏览器版无菜单)
+      if (mod && e.key.toLowerCase() === 'w') {
+        e.preventDefault()
+        if (s.activeId) s.closeTab(s.activeId)
+        return
+      }
+      // Ctrl+Tab / Ctrl+Shift+Tab 与 ⌘⇧] / ⌘⇧[ 切换标签页(桌面端菜单加速器优先,此处兜底浏览器版)
+      if ((e.ctrlKey && e.key === 'Tab') || (mod && (e.key === ']' || e.key === '['))) {
+        e.preventDefault()
+        s.nextTab(e.shiftKey || e.key === '[' ? -1 : 1)
+        return
+      }
       if (mod && e.key.toLowerCase() === 'f') {
         e.preventDefault()
         document.getElementById('mx-search')?.focus()
@@ -160,6 +250,24 @@ export default function App() {
         void s.paste()
         return
       }
+      // README/速查表声称的快捷键:Ctrl+Shift+N 新建文件夹 / Ctrl+N 新建文本文档
+      // mac 上 Cmd+N 与"新建窗口"习惯冲突,遵循速查表约定仍映射为新建
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'n' && !tab.view) {
+        e.preventDefault()
+        s.createEntry('folder')
+        return
+      }
+      if (mod && !e.shiftKey && e.key.toLowerCase() === 'n' && !tab.view) {
+        e.preventDefault()
+        s.createEntry('file')
+        return
+      }
+      // mac ⌘↑ 上一级(速查表声称)
+      if (e.metaKey && !e.ctrlKey && e.key === 'ArrowUp' && !tab.view) {
+        e.preventDefault()
+        s.goUp()
+        return
+      }
       if (e.altKey && e.key === 'ArrowLeft') {
         s.goBack()
         return
@@ -174,6 +282,27 @@ export default function App() {
         return
       }
 
+      // 数字键:Alt+N(全平台)与 ⌘N(mac)跳转标签;Win 的 Ctrl+1/2 切换列表/大图标视图
+      const digit = /^Digit([1-9])$/.exec(e.code)
+      if (digit && !tab.view) {
+        if ((e.altKey || e.metaKey) && !e.ctrlKey) {
+          e.preventDefault()
+          s.jumpToTab(Number(digit[1]) - 1)
+          return
+        }
+        if (e.ctrlKey && !e.metaKey && !e.altKey && (digit[1] === '1' || digit[1] === '2')) {
+          e.preventDefault()
+          st.set('viewMode', digit[1] === '1' ? 'details' : 'grid')
+          return
+        }
+      }
+      // Ctrl/Cmd+Shift+. 显示/隐藏文件
+      if (mod && e.shiftKey && e.key === '.') {
+        e.preventDefault()
+        st.toggle('showHidden')
+        return
+      }
+
       switch (e.key) {
         case 'F5':
           e.preventDefault()
@@ -183,9 +312,23 @@ export default function App() {
           if (single && !tab.view) s.startRename(single.path)
           break
         case 'Delete':
+          if (e.shiftKey) {
+            if (!tab.view && sel.length) {
+              e.preventDefault()
+              s.permanentDeleteSelection()
+            }
+            break
+          }
           if (!tab.view && sel.length) s.deleteSelection()
           break
         case 'Backspace':
+          if (mod && e.altKey) {
+            if (!tab.view && sel.length) {
+              e.preventDefault()
+              s.permanentDeleteSelection()
+            }
+            break
+          }
           if (!tab.view) s.goUp()
           break
         case ' ':

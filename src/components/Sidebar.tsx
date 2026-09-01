@@ -1,7 +1,9 @@
-import { FolderOpen, Plus, X, Zap, MonitorPlay, HardDrive, Home } from 'lucide-react'
+import { FolderOpen, Plus, X, Zap, MonitorPlay, HardDrive, Home, Trash2 } from 'lucide-react'
 import { HOME_PATH } from '../stores/scan'
 import { useFs } from '../stores/fs'
 import { useSettings } from '../stores/settings'
+import { useTrash } from '../stores/trash'
+import { useUi } from '../stores/ui'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { Btn } from './ui'
 
@@ -86,6 +88,20 @@ export function Sidebar() {
           </div>
         ))}
         {!s.roots.length && <div className="px-2 py-3 text-xs text-txt2">还没有添加任何位置</div>}
+        {s.provider?.kind === 'native' && (
+          <div
+            role="button"
+            onClick={() => {
+              void useTrash.getState().load()
+              useUi.getState().showDialog({ type: 'trash' })
+              closeOnMobile()
+            }}
+            className="mt-1 flex h-9 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] text-txt hover:bg-hover md:h-8"
+          >
+            <Trash2 className="h-4 w-4 shrink-0 text-txt2" />
+            <span className="min-w-0 flex-1 truncate">回收站</span>
+          </div>
+        )}
       </div>
       <div className="space-y-1.5 border-t border-brd p-2.5">
         <Btn

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
 import MarkdownIt from 'markdown-it'
 import { Pencil, Columns2, Eye, Loader2 } from 'lucide-react'
 import type { ViewerProps } from './registry'
@@ -6,8 +6,32 @@ import { useFs } from '../stores/fs'
 import { useUi } from '../stores/ui'
 import { useCodeEditor } from './TextViewer'
 import { IconBtn } from '../components/ui'
+import { decodeSmart } from '../utils/format'
+
+const MD_SIZE_LIMIT = 8 * 1024 * 1024
 
 const md = new MarkdownIt({ html: false, linkify: true, typographer: true })
+
+/** GFM 任务列表:- [ ] / - [x] 渲染为 checkbox */
+function taskListPlugin(md: MarkdownIt) {
+  md.core.ruler.after('inline', 'github-task-list', (state) => {
+    const tokens = state.tokens
+    for (let i = 2; i < tokens.length; i++) {
+      if (tokens[i].type !== 'inline' || tokens[i - 1].type !== 'paragraph_open') continue
+      const m = /^\[([ xX])\]\s+/.exec(tokens[i].content)
+      if (!m) continue
+      const checked = m[1] !== ' '
+      tokens[i].content = tokens[i].content.slice(m[0].length)
+      // 段落变列表项样式:注入 checkbox 前缀
+      const box = new state.Token('html_inline', '', 0)
+      box.content = `<input type="checkbox" disabled${checked ? ' checked' : ''} class="md-task"> `
+      tokens[i].children?.unshift(box)
+      tokens[i - 1].attrJoin('class', 'md-task-item')
+    }
+    return true
+  })
+}
+md.use(taskListPlugin)
 
 type Mode = 'split' | 'edit' | 'preview'
 
@@ -29,7 +53,12 @@ export function MarkdownViewer({ entry, readOnly, api }: ViewerProps) {
         const provider = useFs.getState().provider
         if (!provider) return
         const f = await provider.getFile(entry.path)
-        const text = await f.text()
+        if (f.size > MD_SIZE_LIMIT) {
+          if (alive) setError(`文件较大(${(f.size / 1024 / 1024).toFixed(1)} MB),超出 Markdown 预览上限`)
+          return
+        }
+        const bytes = new Uint8Array(await f.arrayBuffer())
+        const { text } = decodeSmart(bytes)
         if (!alive) return
         savedRef.current = text
         getTextRef.current = () => text
@@ -79,7 +108,9 @@ export function MarkdownViewer({ entry, readOnly, api }: ViewerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry.path, readOnly, doc])
 
-  const html = useMemo(() => md.render(doc ?? ''), [doc])
+  // 击键防抖渲染:编辑时预览跟随 deferred 值,大文档不再每键全量重渲染
+  const deferredDoc = useDeferredValue(doc)
+  const html = useMemo(() => md.render(deferredDoc ?? ''), [deferredDoc])
 
   if (error) return <div className="flex h-full items-center justify-center text-txt2">{error}</div>
   if (doc === null)
