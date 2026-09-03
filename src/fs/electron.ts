@@ -484,3 +484,127 @@ export function nativeExtras2(): NativeExtras2 | null {
   }
   return api as NativeExtras2
 }
+
+// ---------- 可执行程序启动(exec:*) ----------
+
+/** 单条探测结果(主进程 exec:probe 返回,批量中单条失败不拖垮整批) */
+export interface ExecProbeResult {
+  path: string
+  kind: 'exe' | 'msi' | 'script' | 'lnk' | 'url' | 'desktop' | 'app' | 'installer' | 'elf' | 'dir' | 'other'
+  executable: boolean
+  isBundle: boolean
+  /** 0=无执行语义 1=程序(确认可记住) 2=危险脚本(强制确认禁记住) 3=代理执行(只显示目标) */
+  level: 0 | 1 | 2 | 3
+  /** 人类可读风险标签:系统受保护目录 / 来自下载或临时目录 / 脚本文件 / 快捷方式等 */
+  risky: string[]
+  error?: string
+}
+
+export interface ExecRunResult {
+  mode: 'spawn' | 'open' | 'denied'
+  pid?: number
+  reason?: string
+}
+
+export interface ExecPolicyItem {
+  path: string
+  allow: boolean
+  at: number
+}
+
+/**
+ * 可执行程序启动能力(独立探测):旧 preload 缺任一方法即整体降级,
+ * 不影响 watch/clip/trash/search 等其它能力。确认框由主进程原生弹出,渲染层不画。
+ */
+export interface NativeLaunch {
+  execProbe(paths: string[]): Promise<ExecProbeResult[]>
+  execRun(opts: { path: string; args?: string[]; force?: boolean }): Promise<ExecRunResult>
+  execIcon(opts: { path: string; size?: 'small' | 'normal' | 'large' }): Promise<string | null>
+  execIsSensitive(path: string): Promise<boolean>
+  execPolicyList(): Promise<ExecPolicyItem[]>
+  execPolicyReset(path?: string): Promise<void>
+  onExecExit(cb: (d: { pid: number; code: number | null; signal: string | null }) => void): () => void
+}
+
+export function nativeLaunch(): NativeLaunch | null {
+  if (typeof window === 'undefined') return null
+  const api = (window as unknown as { mxAPI?: Partial<NativeLaunch> }).mxAPI
+  if (!api) return null
+  const need = [
+    'execProbe',
+    'execRun',
+    'execIcon',
+    'execIsSensitive',
+    'execPolicyList',
+    'execPolicyReset',
+    'onExecExit',
+  ] as const
+  for (const k of need) {
+    if (typeof api[k] !== 'function') return null
+  }
+  return api as NativeLaunch
+}
+
+// ---------- 程序元数据 / 已安装程序(主页「应用程序」分类) ----------
+
+/** 可执行文件元数据(主进程 exec:meta 的返回,永不抛错,失败降级为 error 字段) */
+export interface ExecMeta {
+  path: string
+  name?: string
+  version?: string
+  publisher?: string
+  description?: string
+  productName?: string
+  /** null = 平台不支持或未检测到;true/false = 已验证结果 */
+  signed: boolean | null
+  signer?: string | null
+  /** 是否带「来自互联网」标记(Win Zone.Identifier / mac quarantine) */
+  motw: boolean
+  error?: string
+}
+
+/** 已安装程序条目(主进程 exec:uninstallList 的返回;目前只有 Windows 有数据) */
+export interface InstalledApp {
+  id: string
+  name: string
+  version?: string
+  publisher?: string
+  /** YYYYMMDD */
+  installDate?: string
+  installLocation?: string
+  /** KB */
+  estimatedSize?: number
+  uninstallString: string
+  quietUninstallString?: string
+  /** 已剥离 ",0" 索引后缀,可直接喂 execIcon */
+  iconPath?: string
+  isSystemComponent?: boolean
+}
+
+/** 程序元数据 + 已安装程序列表/卸载(主页「应用程序」分类的数据源) */
+export interface NativeAppMeta {
+  execMeta(path: string): Promise<ExecMeta>
+  execUninstallList(): Promise<{ items: InstalledApp[]; unsupported?: boolean; error?: string }>
+  execUninstall(opts: { app: InstalledApp }): Promise<{ ok: boolean; error?: string }>
+  /** 与 nativeLaunch 复用同一个 preload 方法(取图标),这里只要求它存在 */
+  execIcon(opts: { path: string; size?: 'small' | 'normal' | 'large' }): Promise<string | null>
+}
+
+/**
+ * 独立探测:必须另起一个函数,不能并入 nativeLaunch()。
+ * nativeLaunch 的 need 是「全量判定」—— 只要缺一个就整体返回 null。
+ * 把本轮新增的 execMeta / execUninstall* 塞进它的 need,会让只装了 P0 能力的旧 preload
+ * 连已经能用的「运行程序」一起降级;反过来若旧 preload 没有这些方法,扩展后的
+ * nativeLaunch 也会整体失效。这里单独判定,缺能力只关掉「应用程序」分类。
+ * execIcon 两处共用同一个 preload 方法,探测时只校验存在性,不另发明一套。
+ */
+export function nativeAppMeta(): NativeAppMeta | null {
+  if (typeof window === 'undefined') return null
+  const api = (window as unknown as { mxAPI?: Partial<NativeAppMeta> }).mxAPI
+  if (!api) return null
+  const need = ['execMeta', 'execUninstallList', 'execUninstall', 'execIcon'] as const
+  for (const k of need) {
+    if (typeof api[k] !== 'function') return null
+  }
+  return api as NativeAppMeta
+}

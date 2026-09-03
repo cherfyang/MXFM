@@ -4,6 +4,9 @@ import { persist } from 'zustand/middleware'
 export type ViewMode = 'details' | 'grid'
 export type SortKey = 'name' | 'size' | 'type' | 'modified'
 export type ThemeId = 'dark' | 'light' | 'green' | 'warm' | 'ocean'
+export type ExecRunPolicy = 'alwaysAsk' | 'askUntrusted' | 'never'
+export type ExecAppBundleDoubleClick = 'viewer' | 'run'
+export type ExecScriptDefault = 'view' | 'run'
 
 export interface ThemeMeta {
   id: ThemeId
@@ -33,6 +36,17 @@ interface SettingsState {
   singleClickOpen: boolean
   sidebarVisible: boolean
   previewVisible: boolean
+  // ---- 可执行程序 ----
+  /** 运行前确认策略:alwaysAsk=每次确认 askUntrusted=仅未记住的程序确认 never=不确认(不推荐) */
+  execRunPolicy: ExecRunPolicy
+  /** .app bundle 双击行为:viewer=进可执行信息 run=直接运行(同访达) */
+  execAppBundleDoubleClick: ExecAppBundleDoubleClick
+  /** 脚本双击默认行为:view=编辑器 run=运行 */
+  execScriptDefault: ExecScriptDefault
+  /** 系统受保护目录内禁用运行 */
+  execSafeModeSystemDirs: boolean
+  /** 是否显示角标(安装包/脚本) */
+  execShowBadges: boolean
   set<K extends keyof SettingsState>(key: K, value: SettingsState[K]): void
   toggle(key: 'viewMode' | 'foldersFirst' | 'showHidden' | 'singleClickOpen' | 'sidebarVisible' | 'previewVisible'): void
 }
@@ -49,20 +63,33 @@ export const useSettings = create<SettingsState>()(
       singleClickOpen: true,
       sidebarVisible: true,
       previewVisible: false,
+      execRunPolicy: 'askUntrusted',
+      execAppBundleDoubleClick: 'viewer',
+      execScriptDefault: 'view',
+      execSafeModeSystemDirs: true,
+      execShowBadges: true,
       set: (key, value) => set({ [key]: value } as Partial<SettingsState>),
       toggle: (key) => set({ [key]: !get()[key] } as Partial<SettingsState>),
     }),
     {
       name: 'mx-fm-settings',
-      migrate: (state) => {
-        // 旧版本只有 dark/light 两值,直接兼容
-        const t = (state as { theme?: string }).theme
+      migrate: (state, version) => {
+        // v0/v1 → v2:补默认值;旧版本只有 dark/light 两值,直接兼容
+        const s = state as Record<string, unknown>
+        const t = s.theme
         if (t !== 'dark' && t !== 'light' && t !== 'green' && t !== 'warm' && t !== 'ocean') {
-          ;(state as { theme?: ThemeId }).theme = 'dark'
+          s.theme = 'dark'
         }
-        return state as SettingsState
+        if (version < 2) {
+          s.execRunPolicy ??= 'askUntrusted'
+          s.execAppBundleDoubleClick ??= 'viewer'
+          s.execScriptDefault ??= 'view'
+          s.execSafeModeSystemDirs ??= true
+          s.execShowBadges ??= true
+        }
+        return s as unknown as SettingsState
       },
-      version: 1,
+      version: 2,
     }
   )
 )

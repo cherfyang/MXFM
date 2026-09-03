@@ -26,6 +26,7 @@ const XlsxViewer = lazyOf(() => import('./XlsxViewer'), 'XlsxViewer')
 const DocxViewer = lazyOf(() => import('./DocxViewer'), 'DocxViewer')
 const ZipViewer = lazyOf(() => import('./ZipViewer'), 'ZipViewer')
 const EpubViewer = lazyOf(() => import('./EpubViewer'), 'EpubViewer')
+const ExecutableViewer = lazyOf(() => import('./ExecutableViewer'), 'ExecutableViewer')
 
 export interface ViewerApi {
   setDirty(dirty: boolean): void
@@ -75,6 +76,8 @@ const VIEWERS: Record<Category, React.ComponentType<ViewerProps>> = {
   ebook: EpubViewer,
   code: TextViewer,
   text: TextViewer,
+  executable: ExecutableViewer,
+  installer: ExecutableViewer,
   binary: HexViewer,
 }
 
@@ -94,6 +97,8 @@ const CAT_LABEL: Record<Category, string> = {
   ebook: '电子书',
   code: '代码',
   text: '文本',
+  executable: '应用程序',
+  installer: '安装包',
   binary: '二进制',
 }
 

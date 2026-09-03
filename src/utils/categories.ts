@@ -14,6 +14,8 @@ export type Category =
   | 'code'
   | 'text'
   | 'legacy'
+  | 'executable'
+  | 'installer'
   | 'binary'
 
 const EXT_MAP: Record<Exclude<Category, 'folder' | 'binary'>, string[]> = {
@@ -37,6 +39,10 @@ const EXT_MAP: Record<Exclude<Category, 'folder' | 'binary'>, string[]> = {
     'makefile', 'cmake', 'dockerfile', 'gradle', 'prisma', 'vue2',
   ],
   text: ['txt', 'log', 'nfo', 'srt', 'ass', 'ssa', 'lrc', 'properties', 'license', 'readme'],
+  // 可执行程序:双击 = 运行(经分级确认),绝不进 EDITABLE_CATEGORIES
+  executable: ['exe', 'com', 'scr', 'pif', 'app', 'appimage', 'run', 'bin', 'command', 'jar', 'elf', 'out'],
+  // 安装包:双击 = 安装(强化确认),与可执行程序语义分开,便于确认逻辑区分
+  installer: ['msi', 'msp', 'msix', 'appx', 'pkg', 'deb', 'rpm', 'apk'],
 }
 
 const LOOKUP = new Map<string, Category>()
@@ -44,8 +50,17 @@ for (const [cat, exts] of Object.entries(EXT_MAP)) {
   for (const e of exts) LOOKUP.set(e, cat as Category)
 }
 
+/** macOS bundle 形态的目录扩展名(它们是目录,但语义上是"一个可执行应用") */
+const BUNDLE_EXTS = new Set(['app', 'bundle', 'framework', 'workflow', 'appex'])
+
 export function categoryOf(entry: { kind: 'file' | 'directory'; name: string; ext: string }): Category {
-  if (entry.kind === 'directory') return 'folder'
+  // 目录默认是文件夹;但 macOS 的 .app 等 bundle 是目录形态的"应用",必须特殊化,
+  // 否则双击会钻进 Contents/ 内部(目录的 entry.ext 恒为空串,所以要从 name 取)
+  if (entry.kind === 'directory') {
+    const ext = entry.ext || extFromName(entry.name)
+    if (ext && BUNDLE_EXTS.has(ext)) return 'executable'
+    return 'folder'
+  }
   const ext = entry.ext || extFromName(entry.name)
   return LOOKUP.get(ext) ?? 'binary'
 }
@@ -72,15 +87,32 @@ const LABELS: Record<Category, string> = {
   ebook: '电子书',
   code: '源代码',
   text: '文本文档',
+  executable: '应用程序',
+  installer: '安装包',
   binary: '文件',
 }
 
 export function describeType(entry: { kind: 'file' | 'directory'; name: string; ext: string }): string {
-  if (entry.kind === 'directory') return '文件夹'
   const ext = entry.ext || extFromName(entry.name)
   const label = LABELS[categoryOf(entry)]
+  if (entry.kind === 'directory') {
+    // bundle 目录:显示「APP 应用程序」而非「文件夹」
+    return BUNDLE_EXTS.has(ext) ? `${ext.toUpperCase()} ${label}` : '文件夹'
+  }
   return ext ? `${ext.toUpperCase()} ${label}` : label
 }
 
-/** 可编辑的类别(其余为只读查看) */
+/** 可编辑的类别(其余为只读查看) —— executable/installer/脚本类绝不加入:双击语义是运行而非编辑 */
 export const EDITABLE_CATEGORIES: Set<Category> = new Set(['text', 'code', 'markdown', 'csv', 'excel'])
+
+/** 可启动类别:双击语义是运行(经主进程分级确认) */
+export const LAUNCHABLE_CATEGORIES: Set<Category> = new Set(['executable', 'installer'])
+
+/** 脚本扩展名:保留在 code 类(可编辑),但双击语义按设置可改为运行 */
+const SCRIPT_EXTS = new Set(['bat', 'cmd', 'ps1', 'sh', 'bash'])
+
+export function isScriptEntry(entry: { kind: 'file' | 'directory'; name: string; ext: string }): boolean {
+  if (entry.kind !== 'file') return false
+  const ext = entry.ext || extFromName(entry.name)
+  return SCRIPT_EXTS.has(ext)
+}

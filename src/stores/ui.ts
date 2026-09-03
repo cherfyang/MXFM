@@ -46,7 +46,19 @@ export interface TrashDialog {
   type: 'trash'
 }
 
-export type DialogState = ConfirmDialog | PromptDialog | ConflictDialog | MemoryDialog | ShortcutsDialog | TrashDialog
+/** 已记住的可运行程序管理(内容由 ExecPolicyDialog 组件渲染) */
+export interface ExecPolicyDialog {
+  type: 'execPolicy'
+}
+
+export type DialogState =
+  | ConfirmDialog
+  | PromptDialog
+  | ConflictDialog
+  | MemoryDialog
+  | ShortcutsDialog
+  | TrashDialog
+  | ExecPolicyDialog
 
 export type MenuItem =
   | { sep: true }

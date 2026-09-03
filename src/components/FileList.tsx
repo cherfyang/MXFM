@@ -7,7 +7,7 @@ import { useUi } from '../stores/ui'
 import type { FileEntry } from '../fs/types'
 import { processEntries } from '../utils/listing'
 import { fmtBytes, fmtDate } from '../utils/format'
-import { describeType, categoryOf } from '../utils/categories'
+import { describeType, categoryOf, LAUNCHABLE_CATEGORIES, isScriptEntry } from '../utils/categories'
 import { isValidName } from '../utils/path'
 import { EntryIcon } from './Icons'
 import { buildEntryMenuItems, buildEmptyMenuItems } from '../stores/fs'
@@ -116,7 +116,11 @@ export function FileList() {
           s.openEntry(entry)
           return
         }
-        if (entry.kind === 'file' && st.singleClickOpen) {
+        // 可执行/安装包类:单击只选中不打开(singleClickOpen 豁免,防误触运行)
+        const launchable =
+          LAUNCHABLE_CATEGORIES.has(categoryOf(entry)) ||
+          (isScriptEntry(entry) && useSettings.getState().execScriptDefault === 'run')
+        if (entry.kind === 'file' && st.singleClickOpen && !launchable) {
           s.clickSelect(entry, index, entries, e)
           s.openEntry(entry)
         } else {

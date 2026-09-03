@@ -14,7 +14,8 @@ import {
 } from '../fs/ops'
 import { idbAllRoots, idbPutRoot, idbDeleteRoot } from '../fs/idb'
 import { joinPath, parentOf, baseName, isValidName } from '../utils/path'
-import { categoryOf, type Category } from '../utils/categories'
+import { categoryOf, LAUNCHABLE_CATEGORIES, isScriptEntry, type Category } from '../utils/categories'
+import { nativeLaunch } from '../fs/electron'
 import { useUi, type MenuItem } from './ui'
 import { useSettings } from './settings'
 
@@ -136,7 +137,7 @@ interface FsState {
   refresh(tabId?: string): Promise<void>
   setFilter(text: string): void
 
-  openEntry(entry: FileEntry): void
+  openEntry(entry: FileEntry, opts?: { forceView?: boolean }): void
   closeView(): void
   requestCloseView(): void
   setDirty(dirty: boolean): void
@@ -784,15 +785,26 @@ export const useFs = create<FsState>()((set, get) => {
       set({ tabs: withSession(s.tabs.map((t) => (t.id === tab.id ? { ...t, filter: text } : t)), s.activeId) })
     },
 
-    openEntry(entry) {
+    openEntry(entry, opts) {
       const s = get()
       const tab = activeTab()
       if (!tab) return
-      if (entry.kind === 'directory') {
+      const entryCat = categoryOf(entry)
+      if (entry.kind === 'directory' && entryCat !== 'executable') {
+        // 普通文件夹导航;.app 等 bundle 不是文件夹,走下面的查看/运行
         get().navigate(entry.path)
         return
       }
-      const category = categoryOf(entry)
+      // .app bundle:双击行为由 execAppBundleDoubleClick 设置决定(默认进可执行信息,可切为访达式直接运行)
+      const isBundle = entry.kind === 'directory' && entryCat === 'executable'
+      // 可执行/安装包/脚本 → 分流到运行链路(主进程分级 + 原生确认);
+      // forceView(Alt+双击 / 菜单「打开可执行信息」)跳过运行直接进查看器
+      const bundleWantsRun = isBundle && useSettings.getState().execAppBundleDoubleClick === 'run'
+      if (!opts?.forceView && (bundleWantsRun || isLaunchableEntry(entry))) {
+        void launchEntry(entry)
+        return
+      }
+      const category = entryCat
       const tabs = s.tabs.map((t) =>
         t.id === tab.id ? { ...t, view: { entry, category, dirty: false } } : t
       )
@@ -1442,6 +1454,38 @@ function openTerminalHere() {
   }
 }
 
+/** 判断条目是否走"运行"链路(executable/installer 类,或按设置的脚本) */
+function isLaunchableEntry(entry: FileEntry): boolean {
+  if (entry.kind !== 'file' && categoryOf(entry) !== 'executable') return false
+  const cat = categoryOf(entry)
+  if (LAUNCHABLE_CATEGORIES.has(cat)) return true
+  // 脚本保留在 code 类:双击行为由 execScriptDefault 设置决定
+  if (isScriptEntry(entry)) return useSettings.getState().execScriptDefault === 'run'
+  return false
+}
+
+/** 运行入口:路径转本机格式后交主进程分级 + 原生确认;确认框在主进程,渲染层不画 */
+async function launchEntry(entry: FileEntry, args?: string[]) {
+  const s = useFs.getState()
+  const launch = nativeLaunch()
+  if (!launch || s.provider?.kind !== 'native') {
+    useUi.getState().toast('当前环境不支持运行程序', 'error')
+    return
+  }
+  // execRunPolicy 在主进程 exec:run 内部生效(never→跳过确认),此处不重复判定
+  try {
+    const native = (s.provider as ElectronProvider).toNativePath(entry.path)
+    const r = await launch.execRun({ path: native, args })
+    if (r.mode === 'denied') {
+      useUi.getState().toast(r.reason || '已取消运行', 'info')
+      return
+    }
+    useUi.getState().toast(`已启动 ${entry.name}`, 'success')
+  } catch (e) {
+    useUi.getState().toast(String((e as Error).message || e), 'error')
+  }
+}
+
 /** 供 FileList 的右键菜单使用:基于当前选择构造通用操作项 */
 export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
   const s = useFs.getState()
@@ -1449,9 +1493,27 @@ export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
   const single = sel.length === 1
   const plat = (s.provider as unknown as { platform?: string } | null)?.platform
   const isNative = s.provider?.kind === 'native'
+  const launch = nativeLaunch()
   if (single && sel[0].kind === 'directory') {
-    items.push({ label: '打开', onClick: () => s.openEntry(sel[0]) })
-    items.push({ label: '在新标签页打开', onClick: () => s.newTab(sel[0].path) })
+    const cat = categoryOf(sel[0])
+    if (cat === 'executable') {
+      // bundle(.app 等):第一项是「运行」,之后才是「打开包内容」
+      items.push({ label: '运行', onClick: () => s.openEntry(sel[0]) })
+      items.push({ label: '打开可执行信息', onClick: () => s.openEntry(sel[0], { forceView: true }) })
+    } else {
+      items.push({ label: '打开', onClick: () => s.openEntry(sel[0]) })
+      items.push({ label: '在新标签页打开', onClick: () => s.newTab(sel[0].path) })
+    }
+    items.push({ sep: true })
+  }
+  // 单个可执行/安装包/脚本:置顶「运行」组(受保护目录时禁用,由主进程 execIsSensitive 判定)
+  if (isNative && launch && single && sel[0].kind === 'file' && isLaunchableEntry(sel[0])) {
+    const entry = sel[0]
+    items.push({ label: categoryOf(entry) === 'installer' ? '安装' : '运行', onClick: () => void launchEntry(entry) })
+    items.push({ label: '打开可执行信息', onClick: () => s.openEntry(entry, { forceView: true }) })
+    if (isScriptEntry(entry)) {
+      items.push({ label: '在终端中运行', onClick: () => openTerminalHere() })
+    }
     items.push({ sep: true })
   }
   items.push({ label: '复制', disabled: !sel.length, onClick: () => s.copySelection(sel) })

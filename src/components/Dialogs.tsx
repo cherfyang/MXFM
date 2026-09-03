@@ -16,6 +16,7 @@ export function Dialogs() {
   if (dialog.type === 'memory') return <MemoryDialog />
   if (dialog.type === 'shortcuts') return <ShortcutsDialog />
   if (dialog.type === 'trash') return <TrashDialog />
+  if (dialog.type === 'execPolicy') return <ExecPolicyDialog />
   return <ConflictDialog {...dialog} />
 }
 
@@ -473,6 +474,94 @@ function TrashDialog() {
                 </Btn>
               </div>
             ))
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** 「已记住的可运行程序」管理对话框:列出 exec-policy,可逐条撤销 */
+function ExecPolicyDialog() {
+  const [items, setItems] = useState<{ path: string; allow: boolean; at: number }[] | null>(null)
+  const close = () => useUi.getState().closeDialog()
+
+  const reload = async () => {
+    try {
+      const { nativeLaunch } = await import('../fs/electron')
+      const launch = nativeLaunch()
+      if (!launch) {
+        setItems([])
+        return
+      }
+      setItems(await launch.execPolicyList())
+    } catch {
+      setItems([])
+    }
+  }
+
+  useEffect(() => {
+    void reload()
+  }, [])
+
+  const remove = async (path: string) => {
+    try {
+      const { nativeLaunch } = await import('../fs/electron')
+      nativeLaunch()?.execPolicyReset(path)
+    } finally {
+      void reload()
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className="mx-fade flex w-[min(560px,calc(100vw-24px))] flex-col rounded-xl border border-brd bg-panel shadow-2xl shadow-black/30" style={{ maxHeight: '70vh' }}>
+        <div className="flex h-11 shrink-0 items-center border-b border-brd px-4">
+          <span className="text-[15px] font-semibold">已记住的可运行程序</span>
+          <span className="flex-1" />
+          <button onClick={close} className="rounded p-1.5 text-txt2 hover:bg-hover hover:text-txt" title="关闭 (Esc)">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-3">
+          {items === null ? (
+            <div className="flex h-32 items-center justify-center text-txt2">
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 读取中…
+            </div>
+          ) : items.length === 0 ? (
+            <div className="py-10 text-center text-sm text-txt2">暂无记录 —— 运行程序时勾选「始终允许」后会出现在这里</div>
+          ) : (
+            items.map((p) => (
+              <div key={p.path} className="mb-2 flex items-center gap-3 rounded-lg border border-brd px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className={`truncate text-[13px] ${p.allow ? '' : 'line-through opacity-60'}`} title={p.path}>
+                    {p.path.split(/[\\/]/).pop()}
+                  </div>
+                  <div className="truncate font-mono text-[11px] text-txt2" title={p.path}>
+                    {p.path}
+                  </div>
+                </div>
+                <span className="shrink-0 text-[11px] text-txt2">{fmtDate(p.at)}</span>
+                <Btn className="shrink-0" onClick={() => void remove(p.path)}>
+                  撤销
+                </Btn>
+              </div>
+            ))
+          )}
+        </div>
+        <div className="flex h-11 shrink-0 items-center justify-between border-t border-brd px-4">
+          <span className="text-[11px] text-txt2">撤销后,下次运行该程序会重新弹确认框</span>
+          {items !== null && items.length > 0 && (
+            <Btn
+              variant="danger"
+              onClick={async () => {
+                const { nativeLaunch } = await import('../fs/electron')
+                nativeLaunch()?.execPolicyReset()
+                void reload()
+              }}
+            >
+              清空全部
+            </Btn>
           )}
         </div>
       </div>

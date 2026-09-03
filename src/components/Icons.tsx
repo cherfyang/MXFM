@@ -11,6 +11,8 @@ import {
   FileType,
   Presentation,
   Binary,
+  AppWindow,
+  Package,
   type LucideIcon,
 } from 'lucide-react'
 import type { Category } from '../utils/categories'
@@ -31,6 +33,8 @@ const MAP: Record<Category, { C: LucideIcon; color: string }> = {
   ebook: { C: BookOpen, color: 'text-teal-400' },
   code: { C: FileCode, color: 'text-cyan-400' },
   text: { C: FileText, color: 'text-txt2' },
+  executable: { C: AppWindow, color: 'text-indigo-400' },
+  installer: { C: Package, color: 'text-orange-400' },
   binary: { C: Binary, color: 'text-txt2' },
 }
 

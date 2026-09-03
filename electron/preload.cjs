@@ -65,6 +65,46 @@ contextBridge.exposeInMainWorld('mxAPI', {
   // ---- 在终端打开 ----
   openInTerminal: (dir) => ipcRenderer.invoke('shell:openTerminal', dir),
 
+  // ---- 启动可执行程序 ----
+  // 安全模型:可执行文件一律由主进程原生对话框确认(渲染层自绘弹窗可被伪造/自动点击),
+  // "记住的选择"与审计日志都只落在主进程 userData 下,渲染层无法篡改。
+  // openInSystem 对可执行文件会抛错(文案:「可执行文件请通过「运行」启动」),
+  // 渲染层捕获后应引导用户走 execRun。
+  //
+  // ProbeResult = { path, kind, executable, isBundle, level, risky: string[], error?: string }
+  //   kind:  'exe'|'msi'|'script'|'lnk'|'url'|'desktop'|'app'|'installer'|'elf'|'dir'|'other'
+  //   level: 0=无执行语义(直接 openPath) 1=程序(确认,可记住)
+  //          2=危险脚本(强制确认,禁记住) 3=代理执行(只显示目标,不执行)
+  // RunResult  = { mode: 'spawn'|'open'|'denied', pid?: number, reason?: string }
+  // execProbe 是批量接口:一次传入整屏路径,避免 N 次 IPC 往返。
+  execProbe: (paths) => ipcRenderer.invoke('exec:probe', paths),
+  execRun: (opts) => ipcRenderer.invoke('exec:run', opts),
+  execIcon: (opts) => ipcRenderer.invoke('exec:icon', opts),
+  execIsSensitive: (p) => ipcRenderer.invoke('exec:isSensitive', p),
+  execPolicyList: () => ipcRenderer.invoke('exec:policy:list'),
+  execPolicyReset: (p) => ipcRenderer.invoke('exec:policy:reset', p),
+  // 版本信息与数字签名(永不抛错:拿不到就是字段为空 + error,渲染层降级显示)
+  // ExecMeta = { path, name?, version?, publisher?, description?, productName?,
+  //              signed: boolean|null, signer?: string|null, motw: boolean, error?: string }
+  //   signed:null = 平台不支持或未检测出结论;motw = 「来自互联网」标记
+  // 冷启动子进程有 200~400ms,主进程按 `path:mtimeMs` 缓存(上限 1000 条),可放心逐项调用
+  execMeta: (p) => ipcRenderer.invoke('exec:meta', p),
+  // 已安装程序列表(仅 Windows 注册表;其它平台返回 { items: [], unsupported: true })
+  // InstalledApp = { id, name, version?, publisher?, installDate?, installLocation?,
+  //                  estimatedSize?(KB), uninstallString, quietUninstallString?, iconPath? }
+  // iconPath 已剥掉 ",0" 形式的图标索引后缀,可直接喂给 execIcon
+  // 整表缓存 5 分钟;频繁调用不会重复起子进程
+  execUninstallList: () => ipcRenderer.invoke('exec:uninstallList'),
+  // 执行卸载:确认框由主进程原生弹出(渲染层只负责调用,不用自己画确认框)
+  // 用户取消 → { ok:false, error:'已取消' };启动成功即返回 { ok:true },不等待卸载完成
+  execUninstall: (opts) => ipcRenderer.invoke('exec:uninstall', opts),
+  // 只有被跟踪的进程(msi 等安装类)会推退出事件;其余是发射后不管
+  onExecExit: (cb) => {
+    const h = (_e, data) => cb(data)
+    ipcRenderer.on('exec:exit', h)
+    return () => ipcRenderer.removeListener('exec:exit', h)
+  },
+
   // ---- 回收站 ----
   // TrashItem = { id, name, originalPath|null, size, deletedAt|null, restorable }
   // trashEmpty 由渲染层负责二次确认,主进程直接执行清空
