@@ -28,8 +28,6 @@ import {
   Grid3x3,
   AppWindow,
   ArrowUpDown,
-  ArrowUpNarrowWide,
-  ArrowDownWideNarrow,
 } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { useSearch, type SearchResultItem } from '../stores/search'
@@ -525,11 +523,6 @@ export function openSortMenu(x?: number, y?: number) {
     sortItem('类型', 'type', true),
     { sep: true },
     { label: `${check(st.foldersFirst)}文件夹优先`, onClick: () => useSettings.getState().set('foldersFirst', !st.foldersFirst) },
-    {
-      label: st.sortAsc ? '当前:升序(点击切换整体方向)' : '当前:降序(点击切换整体方向)',
-      icon: st.sortAsc ? <ArrowUpNarrowWide className="h-4 w-4" /> : <ArrowDownWideNarrow className="h-4 w-4" />,
-      onClick: () => useSettings.getState().set('sortAsc', !st.sortAsc),
-    },
   ])
 }
 

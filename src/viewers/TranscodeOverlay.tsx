@@ -8,7 +8,7 @@ export function transcodeAvailable(): boolean {
 }
 
 /** 这些扩展名浏览器基本放不了,直接自动开始转码 */
-export const VIDEO_NEED_TRANSCODE = new Set(['avi', 'wmv', 'flv', 'mpg', 'mpeg', 'mpe', 'ts', 'm2ts', 'vob', '3gp', 'asf', 'rm', 'rmvb', 'f4v'])
+export const VIDEO_NEED_TRANSCODE = new Set(['avi', 'wmv', 'flv', 'mpg', 'mpeg', 'mpe', 'm2ts', 'vob', '3gp', 'asf', 'rm', 'rmvb', 'f4v'])
 export const AUDIO_NEED_TRANSCODE = new Set(['ape', 'tta', 'wv', 'amr', 'ac3', 'dts', 'mka', 'caf'])
 
 interface Props {

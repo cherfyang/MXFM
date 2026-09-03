@@ -52,7 +52,7 @@
 | --- | --- | --- |
 | 图片 | png jpg webp gif bmp svg avif ico · **tif/tiff · heic/heif(iPhone 照片)· psd** | 缩放 / 旋转 / 翻转 / 同类前后切换;TIFF、HEIC、PSD 自动解码(含缩略图) |
 | 图片编辑 | 所有可显示格式 | 内置开源 **Filerobot 编辑器**:裁剪 / 标注 / 文字 / 滤镜,保存为新文件 |
-| 视频 | mp4 webm mkv mov m4v ogv · **avi wmv flv mpg ts m2ts vob 3gp asf rm/rmvb f4v** | 内置播放器:倍速 / 截图 / 画中画 / 全屏 / 循环 / 记忆播放位置;冷门格式**自动 ffmpeg 转码**(优先秒级重封装) |
+| 视频 | mp4 webm mkv mov m4v ogv · **avi wmv flv mpg m2ts vob 3gp asf rm/rmvb f4v** | 内置播放器:倍速 / 截图 / 画中画 / 全屏 / 循环 / 记忆播放位置;冷门格式**自动 ffmpeg 转码**(优先秒级重封装) |
 | 音频 | mp3 wav ogg flac m4a aac opus · **ape tta wv amr ac3 dts mka caf** | 播放 + 前后切换;冷门格式自动转码为 MP3 |
 | 文本 / 代码 | 50+ 扩展名自动识别 | CodeMirror 6:语法高亮 / 查找替换 / Ctrl+S 保存 / GBK 自动检测 |
 | Markdown | md | 编辑 + 实时分屏预览 |

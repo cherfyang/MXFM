@@ -238,6 +238,7 @@ export function GlobalSearchDialog() {
             </span>
           )}
           <span className="flex-1" />
+          {gs.index.truncated && <span className="shrink-0 text-amber-500">文件数超出索引上限,超出部分不在结果中</span>}
           <Btn className="h-6 px-2 text-xs" disabled={gs.index.building} onClick={() => useGlobalSearch.getState().rebuild()}>
             <RefreshCw className="h-3 w-3" /> 重建索引
           </Btn>

@@ -57,6 +57,7 @@ function fmtTimeAgo(ts: number | null): string {
 export function HomePage() {
   const scan = useScan()
   const s = useFs()
+  const indexCounts = useGlobalSearch((st) => st.index.counts)
   // 分类展开状态存 scan store(而非组件 useState):打开文件预览会卸载主页组件,
   // 关闭预览返回时靠 store 恢复到原来的分类列表
   const openGroup = scan.openGroup
@@ -68,6 +69,12 @@ export function HomePage() {
     if (stale && !scan.running) void scan.scan()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 索引计数(全量、准确)优先;没有(浏览器版/索引未就绪)回退扫描计数
+  const countOf = (name: ScanGroup) => {
+    const gid = GROUP_INDEX_ID[name]
+    return indexCounts?.[gid] ?? scan.groups[name].count
+  }
 
   const recents = useMemo(() => {
     const all: FileEntry[] = []
@@ -81,7 +88,7 @@ export function HomePage() {
     return <GroupList group={openGroup} onBack={() => setOpenGroup(null)} onOpen={open} />
   }
 
-  const totalFiles = Object.values(scan.groups).reduce((a, g) => a + g.count, 0)
+  const totalFiles = SCAN_GROUPS.reduce((a, { name }) => a + countOf(name), 0)
   const pct = scan.running ? Math.min(95, Math.round((scan.scannedDirs / 300) * 100)) : 100
 
   return (
@@ -120,22 +127,23 @@ export function HomePage() {
         <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           {SCAN_GROUPS.map(({ name }) => {
             const g = scan.groups[name]
+            const n = countOf(name)
             const { icon: Icon, cls } = GROUP_STYLE[name]
             return (
               <button
                 key={name}
-                onClick={() => g.count > 0 && setOpenGroup(name)}
+                onClick={() => n > 0 && setOpenGroup(name)}
                 className={`flex flex-col items-start gap-2 rounded-xl border border-brd bg-panel p-4 text-left transition-all ${
-                  g.count > 0 ? 'hover:border-acc hover:shadow-md' : 'opacity-60'
+                  n > 0 ? 'hover:border-acc hover:shadow-md' : 'opacity-60'
                 }`}
               >
                 <span className={`flex h-10 w-10 items-center justify-center rounded-lg ${cls}`}>
                   <Icon className="h-5.5 w-5.5" />
                 </span>
-                <span className="mt-1 w-full truncate text-xl font-semibold tabular-nums">{g.count.toLocaleString()}</span>
+                <span className="mt-1 w-full truncate text-xl font-semibold tabular-nums">{n.toLocaleString()}</span>
                 <span className="flex w-full items-center justify-between text-xs text-txt2">
                   <span>{name}</span>
-                  <span>{g.count > 0 ? fmtBytes(g.size) : '—'}</span>
+                  <span>{n > 0 ? fmtBytes(g.size) : '—'}</span>
                 </span>
               </button>
             )
@@ -519,6 +527,7 @@ function PagedGroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack():
   const [items, setItems] = useState<GlobalSearchItem[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const itemsRef = useRef(items)
   itemsRef.current = items
@@ -533,13 +542,20 @@ function PagedGroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack():
     const gen = ++genRef.current
     setItems([])
     setTotal(0)
+    setError(null)
     setLoading(true)
     void (async () => {
-      const page = await queryCategoryPage({ group: gid, sort, asc, offset: 0, limit: PAGE_SIZE })
-      if (genRef.current !== gen) return
-      setItems(page?.items ?? [])
-      setTotal(page?.total ?? 0)
-      setLoading(false)
+      try {
+        const page = await queryCategoryPage({ group: gid, sort, asc, offset: 0, limit: PAGE_SIZE })
+        if (genRef.current !== gen) return
+        setItems(page?.items ?? [])
+        setTotal(page?.total ?? 0)
+        setLoading(false)
+      } catch (e) {
+        if (genRef.current !== gen) return
+        setError(String((e as Error).message || e))
+        setLoading(false)
+      }
     })()
   }, [gid, sort, asc])
 
@@ -555,13 +571,17 @@ function PagedGroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack():
   }, [idxBuilding, resetLoad])
 
   const loadMore = async () => {
-    if (busyRef.current || !itemsRef.current.length || itemsRef.current.length >= totalRef.current) return
+    if (busyRef.current || error || !itemsRef.current.length || itemsRef.current.length >= totalRef.current) return
     busyRef.current = true
     const gen = genRef.current
-    const page = await queryCategoryPage({ group: gid, sort, asc, offset: itemsRef.current.length, limit: PAGE_SIZE })
-    if (genRef.current === gen && page) {
-      setItems((prev) => [...prev, ...page.items])
-      setTotal(page.total)
+    try {
+      const page = await queryCategoryPage({ group: gid, sort, asc, offset: itemsRef.current.length, limit: PAGE_SIZE })
+      if (genRef.current === gen && page) {
+        setItems((prev) => [...prev, ...page.items])
+        setTotal(page.total)
+      }
+    } catch (e) {
+      if (genRef.current === gen) setError(String((e as Error).message || e))
     }
     busyRef.current = false
   }
@@ -616,22 +636,36 @@ function PagedGroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack():
             return (
               <div
                 key={r.path}
-                style={{ transform: `translateY(${vi.start}px)`, position: 'absolute', width: '100%', top: 0, left: 0 }}
+                style={{
+                  transform: `translateY(${vi.start}px)`,
+                  position: 'absolute',
+                  width: '100%',
+                  height: 44,
+                  top: 0,
+                  left: 0,
+                }}
               >
                 <GroupRow name={r.name} path={r.path} size={r.size} modified={r.modified} onClick={() => open(r)} />
               </div>
             )
           })}
         </div>
-        {!items.length && !loading && (
+        {error ? (
+          <div className="flex flex-col items-center gap-2 py-8 text-sm text-danger">
+            <span>加载失败:{error}</span>
+            <Btn onClick={resetLoad}>
+              <RefreshCw className="h-3.5 w-3.5" /> 重试
+            </Btn>
+          </div>
+        ) : !items.length && !loading ? (
           <div className="flex h-32 items-center justify-center text-sm text-txt2">
             {idxBuilding ? '索引构建中,完成后自动显示' : '该分类暂无文件'}
           </div>
-        )}
-        {items.length > 0 && items.length >= total && (
+        ) : null}
+        {!error && items.length > 0 && items.length >= total && (
           <div className="py-3 text-center text-[11px] text-txt2">已显示全部 {total.toLocaleString()} 项</div>
         )}
-        {loading && items.length > 0 && (
+        {!error && loading && items.length > 0 && (
           <div className="flex items-center justify-center gap-2 py-3 text-xs text-txt2">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> 加载中…
           </div>
@@ -686,7 +720,14 @@ function LegacyGroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack()
             return (
               <div
                 key={e.path}
-                style={{ transform: `translateY(${vi.start}px)`, position: 'absolute', width: '100%', top: 0, left: 0 }}
+                style={{
+                  transform: `translateY(${vi.start}px)`,
+                  position: 'absolute',
+                  width: '100%',
+                  height: 44,
+                  top: 0,
+                  left: 0,
+                }}
               >
                 <GroupRow name={e.name} path={e.path} size={e.size} modified={e.modified} onClick={() => onOpen(e)} />
               </div>

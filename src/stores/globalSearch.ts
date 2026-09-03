@@ -22,6 +22,10 @@ export interface IndexStatus {
   count: number
   lastBuildAt: number | null
   roots: string[]
+  /** 每个主页分类的全量计数;仅 v2 索引数据就绪后才有,旧格式/解析中为 null */
+  counts?: Record<string, number> | null
+  /** 构建触及上限被截断 */
+  truncated?: boolean
 }
 
 interface GlobalSearchState {
@@ -135,7 +139,14 @@ async function runSearch(q: string) {
       truncated: !!res.truncated,
       searching: false,
       error: res.error ?? null,
-      index: { building: res.building, count: res.count, lastBuildAt: res.lastBuildAt, roots: res.roots },
+      index: {
+        building: res.building,
+        count: res.count,
+        lastBuildAt: res.lastBuildAt,
+        roots: res.roots,
+        counts: res.counts ?? null,
+        truncated: !!res.truncated,
+      },
     })
   } catch (e) {
     if (id !== searchSeq) return
@@ -150,7 +161,7 @@ export const useGlobalSearch = create<GlobalSearchState>()((set) => ({
   truncated: false,
   searching: false,
   error: null,
-  index: { building: false, count: 0, lastBuildAt: null, roots: [] },
+  index: { building: false, count: 0, lastBuildAt: null, roots: [], counts: null, truncated: false },
 
   setQuery(q) {
     // 输入期间持续把最新索引状态带回来,构建中的提示自动刷新
@@ -183,10 +194,15 @@ export const useGlobalSearch = create<GlobalSearchState>()((set) => ({
   },
 }))
 
-// 模块级订阅一次:索引构建进度实时反映到对话框状态行
+// 模块级订阅一次:索引构建进度实时反映到对话框状态行;启动时主动拉一次状态,
+// 让主页分类卡片能拿到索引计数(否则只有打开过搜索对话框才有数据)
 if (typeof window !== 'undefined') {
   const api = indexApi()
   if (api) {
     api.onIndexProgress((p) => useGlobalSearch.setState({ index: p }))
+    void api
+      .indexStatus()
+      .then((st) => useGlobalSearch.setState({ index: st }))
+      .catch(() => {})
   }
 }

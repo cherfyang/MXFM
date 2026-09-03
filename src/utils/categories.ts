@@ -20,7 +20,7 @@ export type Category =
 
 const EXT_MAP: Record<Exclude<Category, 'folder' | 'binary'>, string[]> = {
   image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico', 'tif', 'tiff', 'heic', 'heif', 'psd'],
-  video: ['mp4', 'm4v', 'webm', 'mkv', 'mov', 'ogv', 'avi', 'wmv', 'flv', 'mpg', 'mpeg', 'mpe', 'ts', 'm2ts', 'vob', '3gp', 'asf', 'rm', 'rmvb', 'f4v'],
+  video: ['mp4', 'm4v', 'webm', 'mkv', 'mov', 'ogv', 'avi', 'wmv', 'flv', 'mpg', 'mpeg', 'mpe', 'm2ts', 'vob', '3gp', 'asf', 'rm', 'rmvb', 'f4v'],
   audio: ['mp3', 'wav', 'ogg', 'oga', 'flac', 'm4a', 'aac', 'opus', 'weba', 'ape', 'tta', 'wv', 'amr', 'ac3', 'dts', 'mka', 'caf'],
   markdown: ['md', 'markdown'],
   pdf: ['pdf'],
@@ -32,7 +32,7 @@ const EXT_MAP: Record<Exclude<Category, 'folder' | 'binary'>, string[]> = {
   zip: ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz'],
   ebook: ['epub'],
   code: [
-    'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'json', 'jsonc', 'py', 'rb', 'go', 'rs', 'java',
+    'js', 'jsx', 'ts', 'tsx', 'mts', 'cts', 'mjs', 'cjs', 'json', 'jsonc', 'py', 'rb', 'go', 'rs', 'java',
     'c', 'h', 'cpp', 'hpp', 'cc', 'cxx', 'cs', 'php', 'swift', 'kt', 'kts', 'dart',
     'sh', 'bash', 'bat', 'cmd', 'ps1', 'sql', 'html', 'htm', 'css', 'scss', 'less', 'vue',
     'svelte', 'xml', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'proto', 'graphql',

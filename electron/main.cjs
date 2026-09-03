@@ -2635,6 +2635,9 @@ const indexState = {
   orders: { name: null, size: null, mtime: null }, // 全量下标排序结果(Uint32Array),懒计算
   orderJob: null, // 在算的排序 Promise(串行化,避免两个大排序并发)
   building: false,
+  parsing: false, // 持久化文件解析中:entries 含未拆分的原始行,查询/搜索一律返回空
+  truncated: false, // 构建触及上限被截断
+  counts: null, // { image, video, audio, document, zip, ebook } 每分类计数;v2 数据就绪后才有
   lastBuildAt: null,
   roots: [],
   aborted: false,
@@ -2649,9 +2652,9 @@ const INDEX_SKIP_DIRS = new Set([
 const INDEX_GROUPS = { image: 1, video: 2, audio: 3, document: 4, zip: 5, ebook: 6 }
 const GROUP_EXTS = {
   1: 'png jpg jpeg gif webp bmp svg avif ico tif tiff heic heif psd',
-  2: 'mp4 m4v webm mkv mov ogv avi wmv flv mpg mpeg mpe ts m2ts vob 3gp asf rm rmvb f4v',
+  2: 'mp4 m4v webm mkv mov ogv avi wmv flv mpg mpeg mpe m2ts vob 3gp asf rm rmvb f4v',
   3: 'mp3 wav ogg oga flac m4a aac opus weba ape tta wv amr ac3 dts mka caf',
-  4: 'pdf docx xlsx xls xlsm ods xlsb dif sylk csv tsv pptx doc dot ppt pot pps rtf md markdown',
+  4: 'pdf docx xlsx xls xlsm ods xlsb dif sylk csv tsv pptx doc dot ppt pot pps rtf md markdown ts tsx mts cts mjs cjs js jsx json py rb go rs java c h cpp hpp cc cxx cs php swift kt kts dart sh bash bat cmd ps1 sql html htm css scss less vue svelte xml yaml yml toml ini cfg conf env proto graphql makefile cmake dockerfile gradle prisma',
   5: 'zip rar 7z tar gz tgz bz2 xz',
   6: 'epub',
 }
@@ -2670,7 +2673,25 @@ function indexStatusPayload() {
     count: indexState.entries.length,
     lastBuildAt: indexState.lastBuildAt,
     roots: indexState.roots,
+    counts: indexState.counts,
+    truncated: indexState.truncated,
   }
+}
+
+/** 每个主页分类的计数(cats 一次线性扫描);仅在 v2 数据就绪后调用 */
+function computeGroupCounts() {
+  const counts = { image: 0, video: 0, audio: 0, document: 0, zip: 0, ebook: 0 }
+  const cats = indexState.cats
+  for (let i = 0; i < cats.length; i++) {
+    const c = cats[i]
+    if (c === 1) counts.image++
+    else if (c === 2) counts.video++
+    else if (c === 3) counts.audio++
+    else if (c === 4) counts.document++
+    else if (c === 5) counts.zip++
+    else if (c === 6) counts.ebook++
+  }
+  return counts
 }
 
 function broadcastIndex(payload) {
@@ -2729,15 +2750,20 @@ async function rebuildLower(expectedLen) {
  */
 async function loadIndexFile() {
   let raw
+  indexState.parsing = true
   try {
     raw = fs.readFileSync(indexFilePath(), 'utf8')
   } catch {
+    indexState.parsing = false
     return { loaded: false, legacy: false }
   }
   const lines = raw.split('\n')
   raw = null // 释放大字符串
   while (lines.length && !lines[lines.length - 1]) lines.pop()
-  if (!lines.length) return { loaded: false, legacy: false }
+  if (!lines.length) {
+    indexState.parsing = false
+    return { loaded: false, legacy: false }
+  }
   const legacy = !lines[0].includes('\t')
   const n = lines.length
   indexState.entries = lines
@@ -2752,6 +2778,8 @@ async function loadIndexFile() {
   }
   if (legacy) {
     void rebuildLower(n) // 旧格式也补 lower;填充完成前由搜索侧逐条兜底
+    indexState.parsing = false
+    // 旧格式无 cats,counts 保持 null(渲染层回退扫描计数),启动 4s 后会自动重建
     return { loaded: true, legacy: true }
   }
   // v2:逐行解析 path\tsize\tmtime,分块让出事件循环避免启动卡顿
@@ -2759,14 +2787,25 @@ async function loadIndexFile() {
     const line = lines[i]
     const t1 = line.lastIndexOf('\t')
     const t2 = t1 > 0 ? line.lastIndexOf('\t', t1 - 1) : -1
+    let p = line
     if (t2 > 0) {
-      indexState.sizes[i] = Number(line.slice(t1 + 1)) || 0
-      indexState.mtimes[i] = Number(line.slice(t2 + 1, t1)) || 0
-      lines[i] = line.slice(0, t2)
+      // 列序:path\tsize\tmtime → t1 后是 mtime,t2..t1 是 size
+      indexState.sizes[i] = Number(line.slice(t2 + 1, t1)) || 0
+      indexState.mtimes[i] = Number(line.slice(t1 + 1)) || 0
+      p = line.slice(0, t2)
+      lines[i] = p
     }
+    // cats 不落盘,按扩展名重算(目录无扩展名恒为 0;目录标记是尾部 '/',天然满足 dot < sep)
+    const sep = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+    const dot = p.lastIndexOf('.')
+    indexState.cats[i] = dot > sep ? EXT_GROUP.get(p.slice(dot + 1).toLowerCase()) ?? 0 : 0
     if (i % 300000 === 299999) await new Promise((r) => setImmediate(r))
   }
   const ok = await rebuildLower(n)
+  indexState.counts = computeGroupCounts()
+  indexState.parsing = false
+  // 加载完成广播一次最终状态:渲染层启动早期的 indexStatus 拉取拿到的是 counts=null
+  broadcastIndex(indexStatusPayload())
   return { loaded: ok, legacy: false }
 }
 
@@ -2774,6 +2813,7 @@ async function buildGlobalIndex() {
   if (indexState.building) return
   indexState.building = true
   indexState.aborted = false
+  indexState.truncated = false
   let dirs = 0
   try {
     const roots = await probeRoots()
@@ -2788,7 +2828,11 @@ async function buildGlobalIndex() {
 
     async function worker() {
       while (queue.length) {
-        if (indexState.aborted || dirs >= INDEX_LIMITS.maxDirs || entries.length >= INDEX_LIMITS.maxEntries) return
+        if (indexState.aborted) return
+        if (dirs >= INDEX_LIMITS.maxDirs || entries.length >= INDEX_LIMITS.maxEntries) {
+          indexState.truncated = true
+          return
+        }
         const item = queue.shift()
         if (!item || item.depth > INDEX_LIMITS.maxDepth) continue
         dirs++
@@ -2845,6 +2889,7 @@ async function buildGlobalIndex() {
       indexState.lastBuildAt = Date.now()
       // 等 lower 副本就绪再解除 building:分类查询的排序依赖它完整
       await rebuildLower(n)
+      indexState.counts = computeGroupCounts()
       saveIndexFile()
     }
   } finally {
@@ -2922,12 +2967,13 @@ async function getOrder(sort) {
  * group='all' 不过滤;asc=false 时倒序遍历(与升序完全互为镜像,并列项顺序稳定)。
  */
 async function indexQuery(opts) {
+  const out = { results: [], total: 0, ...indexStatusPayload() }
+  if (indexState.parsing) return out // 索引文件解析中:entries 含原始行,直接返回空
   const groupCode = INDEX_GROUPS[opts?.group] ?? 0 // 0 = 不过滤
   const sort = ['name', 'size', 'mtime'].includes(opts?.sort) ? opts.sort : 'mtime'
   const asc = opts?.asc !== false
   const offset = Math.max(0, Number(opts?.offset) || 0)
   const limit = Math.max(1, Math.min(Number(opts?.limit) || 200, 1000))
-  const out = { results: [], total: 0, ...indexStatusPayload() }
   const order = await getOrder(sort)
   if (!order) return out // 计算期间索引被重建:按空结果处理,前端重试即可
   const { entries, sizes, mtimes, cats } = indexState
@@ -2961,7 +3007,7 @@ async function indexSearch(opts) {
   const pattern = typeof opts?.pattern === 'string' ? opts.pattern.trim() : ''
   const limit = Math.max(1, Math.min(Number(opts?.limit) || 500, 2000))
   const out = { results: [], total: 0, truncated: false, ...indexStatusPayload() }
-  if (!pattern) return out
+  if (!pattern || indexState.parsing) return out
   const wild = /[*?]/.test(pattern)
   let re = null
   if (wild) {
