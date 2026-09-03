@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Search, X, Loader2, RefreshCw, Folder, ExternalLink, FolderOpen } from 'lucide-react'
-import { useGlobalSearch, type GlobalSearchItem } from '../stores/globalSearch'
+import { useGlobalSearch, itemToFileEntry, type GlobalSearchItem } from '../stores/globalSearch'
 import { useFs } from '../stores/fs'
 import { useUi } from '../stores/ui'
 import { categoryOf, type Category } from '../utils/categories'
@@ -66,16 +66,8 @@ function Highlight({ text, query }: { text: string; query: string }) {
   )
 }
 
-function toFileEntry(r: GlobalSearchItem): FileEntry | null {
-  if (!r.vpath) return null
-  return {
-    name: r.name,
-    path: r.vpath,
-    kind: r.isDir ? 'directory' : 'file',
-    size: r.size,
-    modified: r.modified,
-    ext: r.isDir ? '' : extOf(r.name),
-  }
+function toFileEntry(r: GlobalSearchItem) {
+  return itemToFileEntry(r)
 }
 
 export function GlobalSearchDialog() {

@@ -2619,14 +2619,21 @@ ipcMain.on('search:cancel', (_e, payload) => {
 //   index:status              → { building, count, lastBuildAt, roots }
 //   index:rebuild             → 立即返回 true;后台重建,进度经 index:progress 推送(广播到全部窗口)
 //   index:search { pattern, limit } → { results:[{name,path,isDir,size,modified}], total, truncated, building, count, lastBuildAt }
-// 实现:全盘 BFS walk(并发 8),内存索引每条只存一个规范化路径字符串(目录以 '/' 结尾);
-// 持久化到 userData/global-index.jsonl,启动时先加载旧索引再按新旧决定是否后台重建。
-// 搜索:大小写不敏感;纯子串时按 精确 > 前缀 > 包含 排序;含 * ? 按通配符。
-// size/mtime 不进索引(省一半构建时间),返回结果页时再补 stat。
+//   index:query { group, sort, asc, offset, limit } → { results:[同上], total, building, count, lastBuildAt }
+//     group: image|video|audio|document|zip|ebook('all'=不过滤);sort: mtime|size|name;全量排序后分页
+// 实现:全盘 BFS walk(并发 8),内存索引每条 = 路径字符串 + size + mtime + 分类码(四个并行数组);
+// 持久化到 userData/global-index.jsonl(v2:每行 path\tsize\tmtime),启动时先加载旧索引再按新旧决定是否后台重建。
+// 搜索:大小写不敏感;纯子串时按 精确 > 前缀 > 包含 排序;含 * ? 按通配符;size/mtime 直接读索引,不再逐条 stat。
+// 排序:名称/大小/时间三种全量顺序按需懒计算,分块排序 + 多路归并,避免长时间阻塞主进程事件循环。
 
 const indexState = {
   entries: [], // 本机绝对路径,统一 '/' 分隔;目录以 '/' 结尾
   lower: [], // entries 的小写副本,搜索期避免每次按键重复 toLowerCase
+  sizes: new Float64Array(0), // 与 entries 同序;目录为 0
+  mtimes: new Float64Array(0), // 与 entries 同序;目录为 0
+  cats: new Uint8Array(0), // 与 entries 同序;0=不在任何主页分类,1..6 = INDEX_GROUPS
+  orders: { name: null, size: null, mtime: null }, // 全量下标排序结果(Uint32Array),懒计算
+  orderJob: null, // 在算的排序 Promise(串行化,避免两个大排序并发)
   building: false,
   lastBuildAt: null,
   roots: [],
@@ -2637,6 +2644,21 @@ const INDEX_SKIP_DIRS = new Set([
   '$recycle.bin', 'system volume information', 'config.msi', 'recovery',
   'node_modules', '.git', 'windowsapps', 'perflogs', 'volumes',
 ])
+
+// 主页六大分类的扩展名映射,必须与渲染层 src/stores/scan.ts 的 groupOf(categoryOf()) 保持一致
+const INDEX_GROUPS = { image: 1, video: 2, audio: 3, document: 4, zip: 5, ebook: 6 }
+const GROUP_EXTS = {
+  1: 'png jpg jpeg gif webp bmp svg avif ico tif tiff heic heif psd',
+  2: 'mp4 m4v webm mkv mov ogv avi wmv flv mpg mpeg mpe ts m2ts vob 3gp asf rm rmvb f4v',
+  3: 'mp3 wav ogg oga flac m4a aac opus weba ape tta wv amr ac3 dts mka caf',
+  4: 'pdf docx xlsx xls xlsm ods xlsb dif sylk csv tsv pptx doc dot ppt pot pps rtf md markdown',
+  5: 'zip rar 7z tar gz tgz bz2 xz',
+  6: 'epub',
+}
+const EXT_GROUP = new Map()
+for (const [g, str] of Object.entries(GROUP_EXTS)) {
+  for (const e of str.split(' ')) EXT_GROUP.set(e, Number(g))
+}
 
 function indexFilePath() {
   return path.join(app.getPath('userData'), 'global-index.jsonl')
@@ -2667,7 +2689,10 @@ function saveIndexFile() {
   try {
     const tmp = indexFilePath() + '.tmp'
     const ws = fs.createWriteStream(tmp, 'utf8')
-    for (const line of indexState.entries) ws.write(line + '\n')
+    const { entries, sizes, mtimes } = indexState
+    for (let i = 0; i < entries.length; i++) {
+      ws.write(entries[i] + '\t' + Math.round(sizes[i]) + '\t' + Math.round(mtimes[i]) + '\n')
+    }
     ws.end(() => {
       fs.rename(tmp, indexFilePath(), () => {})
     })
@@ -2676,18 +2701,73 @@ function saveIndexFile() {
   }
 }
 
-function loadIndexFile() {
-  try {
-    const raw = fs.readFileSync(indexFilePath(), 'utf8')
-    const entries = raw.split('\n').filter(Boolean)
-    if (!entries.length) return false
-    indexState.entries = entries
-    indexState.lower = entries.map((e) => e.toLowerCase())
-    indexState.lastBuildAt = fs.statSync(indexFilePath()).mtimeMs
-    return true
-  } catch {
-    return false
+/** 清空派生数据(lower/排序缓存);数据源变化时调用 */
+function resetDerived(len) {
+  indexState.lower = new Array(len)
+  indexState.orders.name = indexState.orders.size = indexState.orders.mtime = null
+}
+
+/** 重建 lower 副本(分块让出事件循环);返回是否完成(false=中途被重建打断) */
+async function rebuildLower(expectedLen) {
+  const { entries } = indexState
+  const lower = indexState.lower
+  for (let i = 0; i < entries.length; i++) {
+    lower[i] = entries[i].toLowerCase()
+    if (i % 200000 === 199999) {
+      await new Promise((r) => setImmediate(r))
+      if (indexState.entries.length !== expectedLen) return false
+    }
   }
+  indexState.lower.length = entries.length
+  return indexState.entries.length === expectedLen
+}
+
+/**
+ * 加载持久化索引。
+ * 返回 { loaded, legacy }:legacy=true 表示旧版格式(只有路径,无 size/mtime),
+ * 数据仍可用(搜索正常,排序/分类查询退化为空),但应当尽快重建。
+ */
+async function loadIndexFile() {
+  let raw
+  try {
+    raw = fs.readFileSync(indexFilePath(), 'utf8')
+  } catch {
+    return { loaded: false, legacy: false }
+  }
+  const lines = raw.split('\n')
+  raw = null // 释放大字符串
+  while (lines.length && !lines[lines.length - 1]) lines.pop()
+  if (!lines.length) return { loaded: false, legacy: false }
+  const legacy = !lines[0].includes('\t')
+  const n = lines.length
+  indexState.entries = lines
+  resetDerived(n)
+  indexState.sizes = new Float64Array(n)
+  indexState.mtimes = new Float64Array(n)
+  indexState.cats = new Uint8Array(n)
+  try {
+    indexState.lastBuildAt = fs.statSync(indexFilePath()).mtimeMs
+  } catch {
+    /* ignore */
+  }
+  if (legacy) {
+    void rebuildLower(n) // 旧格式也补 lower;填充完成前由搜索侧逐条兜底
+    return { loaded: true, legacy: true }
+  }
+  // v2:逐行解析 path\tsize\tmtime,分块让出事件循环避免启动卡顿
+  for (let i = 0; i < n; i++) {
+    const line = lines[i]
+    const t1 = line.lastIndexOf('\t')
+    const t2 = t1 > 0 ? line.lastIndexOf('\t', t1 - 1) : -1
+    if (t2 > 0) {
+      indexState.sizes[i] = Number(line.slice(t1 + 1)) || 0
+      indexState.mtimes[i] = Number(line.slice(t2 + 1, t1)) || 0
+      lines[i] = line.slice(0, t2)
+    }
+    if (i % 300000 === 299999) await new Promise((r) => setImmediate(r))
+  }
+  const ok = await rebuildLower(n)
+  return { loaded: ok, legacy: false }
 }
 
 async function buildGlobalIndex() {
@@ -2699,6 +2779,9 @@ async function buildGlobalIndex() {
     const roots = await probeRoots()
     indexState.roots = roots.map((r) => r.name)
     const entries = []
+    const sizes = []
+    const mtimes = []
+    const cats = []
     const queue = roots.map((r) => ({ dir: r.path, depth: 0 }))
 
     const join = (dir, name) => (dir.endsWith('/') ? dir + name : dir + '/' + name)
@@ -2721,9 +2804,26 @@ async function buildGlobalIndex() {
             const lower = e.name.toLowerCase()
             if (INDEX_SKIP_DIRS.has(lower) || e.name.startsWith('.') || e.name.startsWith('$')) continue
             entries.push(full + '/')
+            sizes.push(0)
+            mtimes.push(0)
+            cats.push(0)
             if (item.depth + 1 <= INDEX_LIMITS.maxDepth) queue.push({ dir: full, depth: item.depth + 1 })
           } else {
+            // size/mtime 入索引:主页分类列表的全量排序和直接展示都依赖,免掉查询时逐条 stat
+            let size = 0
+            let mtime = 0
+            try {
+              const st = await fsp.stat(full)
+              size = st.size
+              mtime = Math.round(st.mtimeMs)
+            } catch {
+              /* 竞态删除 */
+            }
             entries.push(full)
+            sizes.push(size)
+            mtimes.push(mtime)
+            const dot = e.name.lastIndexOf('.')
+            cats.push(dot > 0 ? EXT_GROUP.get(e.name.slice(dot + 1).toLowerCase()) ?? 0 : 0)
           }
         }
         if (dirs % INDEX_LIMITS.progressEvery === 0) {
@@ -2736,9 +2836,15 @@ async function buildGlobalIndex() {
 
     await Promise.all(Array.from({ length: INDEX_LIMITS.concurrency }, () => worker()))
     if (!indexState.aborted) {
+      const n = entries.length
       indexState.entries = entries
-      indexState.lower = entries.map((e) => e.toLowerCase())
+      indexState.sizes = Float64Array.from(sizes)
+      indexState.mtimes = Float64Array.from(mtimes)
+      indexState.cats = Uint8Array.from(cats)
+      resetDerived(n)
       indexState.lastBuildAt = Date.now()
+      // 等 lower 副本就绪再解除 building:分类查询的排序依赖它完整
+      await rebuildLower(n)
       saveIndexFile()
     }
   } finally {
@@ -2753,21 +2859,102 @@ function startGlobalIndexBuild() {
   })
 }
 
-/** 结果页补 stat(索引里没有 size/mtime);一次最多 limit 条,成本可忽略 */
-async function statResults(results) {
-  await Promise.all(
-    results.map(async (r) => {
-      if (r.isDir) return
-      try {
-        const st = await fsp.stat(r.path)
-        r.size = st.size
-        r.modified = st.mtimeMs
-      } catch {
-        /* 竞态删除:保留 size=0 */
+const yieldLoop = () => new Promise((r) => setImmediate(r))
+
+/**
+ * 全量下标排序(懒计算 + 串行化)。
+ * 分块排序 + K 路归并:每块 6 万条排完就让出事件循环,主进程不出现秒级卡顿。
+ * 返回 null 表示计算期间索引被重建,调用方按空结果处理。
+ */
+async function getOrder(sort) {
+  const cached = indexState.orders[sort]
+  if (cached) return cached
+  while (indexState.orderJob) await indexState.orderJob
+  if (indexState.orders[sort]) return indexState.orders[sort]
+  indexState.orderJob = (async () => {
+    const n = indexState.entries.length
+    const { entries, lower, sizes, mtimes } = indexState
+    const nameCmp = (a, b) =>
+      lower[a] < lower[b] ? -1 : lower[a] > lower[b] ? 1 : entries[a] < entries[b] ? -1 : entries[a] > entries[b] ? 1 : 0
+    const cmp =
+      sort === 'size'
+        ? (a, b) => sizes[a] - sizes[b] || nameCmp(a, b)
+        : sort === 'mtime'
+          ? (a, b) => mtimes[a] - mtimes[b] || nameCmp(a, b)
+          : nameCmp
+    const CHUNK = 60000
+    const runs = []
+    for (let s = 0; s < n; s += CHUNK) {
+      const e = Math.min(n, s + CHUNK)
+      const arr = new Uint32Array(e - s)
+      for (let i = 0; i < arr.length; i++) arr[i] = s + i
+      arr.sort(cmp)
+      runs.push(arr)
+      await yieldLoop()
+      if (indexState.entries.length !== n) return null
+    }
+    const out = new Uint32Array(n)
+    const heads = new Array(runs.length).fill(0)
+    for (let k = 0; k < n; k++) {
+      let best = -1
+      for (let r = 0; r < runs.length; r++) {
+        if (heads[r] >= runs[r].length) continue
+        if (best === -1 || cmp(runs[r][heads[r]], runs[best][heads[best]]) < 0) best = r
       }
-    })
-  )
-  return results
+      out[k] = runs[best][heads[best]++]
+      if (k % 200000 === 199999) {
+        await yieldLoop()
+        if (indexState.entries.length !== n) return null
+      }
+    }
+    indexState.orders[sort] = out
+    return out
+  })()
+  try {
+    return await indexState.orderJob
+  } finally {
+    indexState.orderJob = null
+  }
+}
+
+/**
+ * 分类分页查询:在指定全量顺序上过滤分类,返回 offset 起的一页。
+ * group='all' 不过滤;asc=false 时倒序遍历(与升序完全互为镜像,并列项顺序稳定)。
+ */
+async function indexQuery(opts) {
+  const groupCode = INDEX_GROUPS[opts?.group] ?? 0 // 0 = 不过滤
+  const sort = ['name', 'size', 'mtime'].includes(opts?.sort) ? opts.sort : 'mtime'
+  const asc = opts?.asc !== false
+  const offset = Math.max(0, Number(opts?.offset) || 0)
+  const limit = Math.max(1, Math.min(Number(opts?.limit) || 200, 1000))
+  const out = { results: [], total: 0, ...indexStatusPayload() }
+  const order = await getOrder(sort)
+  if (!order) return out // 计算期间索引被重建:按空结果处理,前端重试即可
+  const { entries, sizes, mtimes, cats } = indexState
+  const n = entries.length
+  const win32 = process.platform === 'win32'
+  const make = (i) => {
+    const full = entries[i]
+    const isDir = full.endsWith('/')
+    const name = isDir ? full.slice(0, -1) : full
+    const sep = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'))
+    return {
+      name: name.slice(sep + 1),
+      path: win32 ? name.replace(/\//g, '\\') : name,
+      isDir,
+      size: sizes[i],
+      modified: mtimes[i] || null,
+    }
+  }
+  let seen = 0
+  for (let k = 0; k < n; k++) {
+    const i = asc ? order[k] : order[n - 1 - k]
+    if (groupCode && cats[i] !== groupCode) continue
+    if (seen >= offset && out.results.length < limit) out.results.push(make(i))
+    seen++
+  }
+  out.total = seen
+  return out
 }
 
 async function indexSearch(opts) {
@@ -2799,7 +2986,7 @@ async function indexSearch(opts) {
     if (wild) {
       if (re.test(base)) rank = base.length === pattern.length ? 3 : 1
     } else {
-      const lb = lowered[i]
+      const lb = lowered[i] ?? full.toLowerCase() // lower 尚在异步填充时逐条兜底
       // base 与 lowered 同偏移:full 尾部就是 base(目录标记已剥)
       const lbBase = isDir ? lb.slice(0, -1) : lb
       const lbBaseLower = lbBase.slice(sep + 1)
@@ -2808,20 +2995,27 @@ async function indexSearch(opts) {
       else if (lbBaseLower.includes(lower)) rank = 1
     }
     if (!rank) continue
-    // 索引内部统一 '/' 分隔;返回给渲染层前转回本机分隔符(toVirtualPath 期望本机风格)
-    ;(rank === 3 ? exact : rank === 2 ? prefix : incl).push({
-      name: base,
-      path: process.platform === 'win32' ? name.replace(/\//g, '\\') : name,
-      isDir,
-      size: 0,
-      modified: null,
-    })
+    ;(rank === 3 ? exact : rank === 2 ? prefix : incl).push(i)
     if (exact.length >= limit && prefix.length >= limit && incl.length >= limit) break
   }
   const ordered = [...exact, ...prefix, ...incl]
   out.total = ordered.length
   out.truncated = ordered.length > limit
-  out.results = await statResults(ordered.slice(0, limit))
+  // size/mtime 直接读索引(构建时已 stat),不再逐条 stat
+  const { sizes, mtimes } = indexState
+  out.results = ordered.slice(0, limit).map((i) => {
+    const full = entries[i]
+    const isDir = full.endsWith('/')
+    const name = isDir ? full.slice(0, -1) : full
+    const sep = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'))
+    return {
+      name: name.slice(sep + 1),
+      path: process.platform === 'win32' ? name.replace(/\//g, '\\') : name,
+      isDir,
+      size: sizes[i],
+      modified: mtimes[i] || null,
+    }
+  })
   return out
 }
 
@@ -2833,6 +3027,8 @@ ipcMain.handle('index:rebuild', () => {
 })
 
 ipcMain.handle('index:search', (_e, opts) => indexSearch(opts))
+
+ipcMain.handle('index:query', (_e, opts) => indexQuery(opts))
 
 // ---------- 程序元数据(版本信息 / 数字签名 / 来源标记)与已安装程序 ----------
 // 契约:
@@ -3385,12 +3581,12 @@ if (!gotSingleLock) {
     cleanTranscodeCache().catch(() => {})
     registerMxfileProtocol()
     createWindow()
-    // 全局搜索索引:先加载上次构建的持久化文件,过期(>12h)或缺失时后台重建
-    {
-      const loaded = loadIndexFile()
-      const stale = !loaded || Date.now() - (indexState.lastBuildAt ?? 0) > 12 * 3600 * 1000
+    // 全局搜索索引:先加载上次构建的持久化文件,过期(>12h)/旧格式/缺失时后台重建
+    void (async () => {
+      const r = await loadIndexFile()
+      const stale = !r.loaded || r.legacy || Date.now() - (indexState.lastBuildAt ?? 0) > 12 * 3600 * 1000
       if (stale) setTimeout(startGlobalIndexBuild, 4000)
-    }
+    })()
     app.on('activate', () => {
       // mac dock 点击:窗口全关后复活
       if (wins.size === 0) createWindow()

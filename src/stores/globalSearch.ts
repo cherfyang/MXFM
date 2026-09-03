@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { useFs } from './fs'
 import type { ElectronProvider } from '../fs/electron'
+import type { FileEntry } from '../fs/types'
+import { extOf } from '../utils/format'
 
 export interface GlobalSearchRaw {
   name: string
@@ -51,6 +53,13 @@ export function indexApi():
       indexStatus(): Promise<IndexStatus>
       indexRebuild(): Promise<boolean>
       indexSearch(opts: { pattern: string; limit?: number }): Promise<IndexSearchResponse>
+      indexQuery(opts: {
+        group: string
+        sort: 'mtime' | 'size' | 'name'
+        asc: boolean
+        offset: number
+        limit: number
+      }): Promise<IndexSearchResponse>
       onIndexProgress(cb: (p: IndexStatus) => void): () => void
     }
   | null {
@@ -72,6 +81,42 @@ function toVpath(nativePath: string): string | null {
 
 function convert(raw: GlobalSearchRaw[]): GlobalSearchItem[] {
   return raw.map((r) => ({ ...r, vpath: toVpath(r.path) }))
+}
+
+/** 索引条目 → 可打开的 FileEntry;不在已挂载根内(转不了虚拟路径)返回 null */
+export function itemToFileEntry(r: GlobalSearchItem): FileEntry | null {
+  if (!r.vpath) return null
+  return {
+    name: r.name,
+    path: r.vpath,
+    kind: r.isDir ? 'directory' : 'file',
+    size: r.size,
+    modified: r.modified,
+    ext: r.isDir ? '' : extOf(r.name),
+  }
+}
+
+export type IndexSort = 'mtime' | 'size' | 'name'
+
+export interface CategoryPage {
+  items: GlobalSearchItem[]
+  /** 该分类的完整总数(按索引全量统计,与单页条数无关) */
+  total: number
+  building: boolean
+}
+
+/** 主页分类列表的分页查询:主进程在全量排序结果上过滤分类后切片 */
+export async function queryCategoryPage(opts: {
+  group: 'image' | 'video' | 'audio' | 'document' | 'zip' | 'ebook' | 'all'
+  sort: IndexSort
+  asc: boolean
+  offset: number
+  limit: number
+}): Promise<CategoryPage | null> {
+  const api = indexApi()
+  if (!api) return null
+  const res = await api.indexQuery(opts)
+  return { items: convert(res.results ?? []), total: res.total ?? 0, building: !!res.building }
 }
 
 let searchSeq = 0

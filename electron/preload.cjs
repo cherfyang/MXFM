@@ -131,10 +131,13 @@ contextBridge.exposeInMainWorld('mxAPI', {
   // indexStatus: { building, count, lastBuildAt, roots }
   // indexSearch({ pattern, limit }) → { results:[{name,path,isDir,size,modified}], total, truncated, building, count }
   //   结果 path 为本机绝对路径(渲染层自行 toVirtualPath)
+  // indexQuery({ group, sort, asc, offset, limit }) → { results:[同上], total, building, count }
+  //   主页分类分页:group=image|video|audio|document|zip|ebook|all;sort=mtime|size|name;全量排序后切片
   // onIndexProgress:构建期广播 { building, count, roots },结束时再推一条最终状态
   indexStatus: () => ipcRenderer.invoke('index:status'),
   indexRebuild: () => ipcRenderer.invoke('index:rebuild'),
   indexSearch: (opts) => ipcRenderer.invoke('index:search', opts),
+  indexQuery: (opts) => ipcRenderer.invoke('index:query', opts),
   onIndexProgress: (cb) => {
     const h = (_e, data) => cb(data)
     ipcRenderer.on('index:progress', h)

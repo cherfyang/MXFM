@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   FileImage,
@@ -18,12 +18,15 @@ import {
   Play,
   Trash2,
   AlertTriangle,
+  ArrowUpNarrowWide,
+  ArrowDownWideNarrow,
 } from 'lucide-react'
 import { useScan, SCAN_GROUPS, type ScanGroup } from '../stores/scan'
 import { useFs } from '../stores/fs'
 import { useApps, type AppEntry } from '../stores/apps'
 import { useUi } from '../stores/ui'
-import { fmtBytes, fmtDate } from '../utils/format'
+import { useGlobalSearch, queryCategoryPage, itemToFileEntry, indexApi, type GlobalSearchItem } from '../stores/globalSearch'
+import { fmtBytes, fmtDate, extOf } from '../utils/format'
 import { categoryOf } from '../utils/categories'
 import { EntryIcon } from './Icons'
 import { Btn } from './ui'
@@ -413,24 +416,243 @@ function AppSection() {
   )
 }
 
-type GroupSort = 'time' | 'size' | 'name'
+type GroupSort = 'mtime' | 'size' | 'name'
 
 const GROUP_SORTS: { id: GroupSort; label: string }[] = [
-  { id: 'time', label: '修改时间' },
+  { id: 'mtime', label: '修改时间' },
   { id: 'size', label: '大小' },
   { id: 'name', label: '文件名' },
 ]
 
+/** 主页分类 → 索引分类 id(与主进程 GROUP_EXTS 对应) */
+const GROUP_INDEX_ID: Record<ScanGroup, 'image' | 'video' | 'audio' | 'document' | 'zip' | 'ebook'> = {
+  图片: 'image',
+  视频: 'video',
+  音频: 'audio',
+  文档: 'document',
+  压缩包: 'zip',
+  电子书: 'ebook',
+}
+
+const PAGE_SIZE = 300
+
 function GroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack(): void; onOpen(e: FileEntry): void }) {
+  const native = useFs((s) => s.provider?.kind === 'native')
+  // 桌面版:走索引分页浏览全量 + 全量排序;浏览器/演示版:仅扫描缓存的最近 200 条
+  if (native && indexApi()) return <PagedGroupList group={group} onBack={onBack} onOpen={onOpen} />
+  return <LegacyGroupList group={group} onBack={onBack} onOpen={onOpen} />
+}
+
+/** 共用列表行 */
+function GroupRow({
+  name,
+  path,
+  size,
+  modified,
+  onClick,
+}: {
+  name: string
+  path: string
+  size: number
+  modified: number | null
+  onClick(): void
+}) {
+  return (
+    <div
+      onClick={onClick}
+      className="absolute left-0 top-0 flex h-11 w-full cursor-default items-center gap-3 px-5 hover:bg-hover"
+      title={path}
+    >
+      <EntryIcon category={categoryOf({ kind: 'file', name, ext: extOf(name) })} />
+      <span className="min-w-0 flex-1 truncate text-[13.5px]">{name}</span>
+      <span className="hidden min-w-0 max-w-[45%] flex-1 truncate text-[11px] text-txt2 sm:block">
+        {parentOf(path.replace(/\\/g, '/'))}
+      </span>
+      <span className="shrink-0 text-xs text-txt2">{fmtBytes(size)}</span>
+      <span className="w-[100px] shrink-0 text-right text-xs text-txt2">{fmtDate(modified)}</span>
+    </div>
+  )
+}
+
+function SortControls({
+  sort,
+  asc,
+  onSort,
+  onToggleAsc,
+}: {
+  sort: GroupSort
+  asc: boolean
+  onSort(s: GroupSort): void
+  onToggleAsc(): void
+}) {
+  return (
+    <>
+      <span className="shrink-0 text-xs text-txt2">排序</span>
+      <select
+        value={sort}
+        onChange={(e) => onSort(e.target.value as GroupSort)}
+        className="h-7 rounded-md bg-panel2 px-1.5 text-xs outline-none [&>option]:text-black"
+        title="列表排序(桌面版作用于该分类的全部文件)"
+      >
+        {GROUP_SORTS.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.label}
+          </option>
+        ))}
+      </select>
+      <button
+        onClick={onToggleAsc}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-txt2 hover:bg-hover hover:text-txt"
+        title={asc ? '当前:升序(从旧到小),点击反转' : '当前:降序(从新到大),点击反转'}
+      >
+        {asc ? <ArrowUpNarrowWide className="h-4 w-4" /> : <ArrowDownWideNarrow className="h-4 w-4" />}
+      </button>
+    </>
+  )
+}
+
+/** 桌面版:全局索引分页加载,无限滚动;排序由主进程在该分类的全部文件上完成 */
+function PagedGroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack(): void; onOpen(e: FileEntry): void }) {
+  const idxBuilding = useGlobalSearch((s) => s.index.building)
+  const [sort, setSort] = useState<GroupSort>('mtime')
+  const [asc, setAsc] = useState(false)
+  const [items, setItems] = useState<GlobalSearchItem[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+  const totalRef = useRef(total)
+  totalRef.current = total
+  const busyRef = useRef(false)
+  const genRef = useRef(0)
+
+  const gid = GROUP_INDEX_ID[group]
+
+  const resetLoad = useCallback(() => {
+    const gen = ++genRef.current
+    setItems([])
+    setTotal(0)
+    setLoading(true)
+    void (async () => {
+      const page = await queryCategoryPage({ group: gid, sort, asc, offset: 0, limit: PAGE_SIZE })
+      if (genRef.current !== gen) return
+      setItems(page?.items ?? [])
+      setTotal(page?.total ?? 0)
+      setLoading(false)
+    })()
+  }, [gid, sort, asc])
+
+  useEffect(() => {
+    resetLoad()
+  }, [resetLoad])
+
+  // 索引从「构建中」转为「完成」时自动刷新一次,替换构建期的部分结果
+  const prevBuilding = useRef(idxBuilding)
+  useEffect(() => {
+    if (prevBuilding.current && !idxBuilding) resetLoad()
+    prevBuilding.current = idxBuilding
+  }, [idxBuilding, resetLoad])
+
+  const loadMore = async () => {
+    if (busyRef.current || !itemsRef.current.length || itemsRef.current.length >= totalRef.current) return
+    busyRef.current = true
+    const gen = genRef.current
+    const page = await queryCategoryPage({ group: gid, sort, asc, offset: itemsRef.current.length, limit: PAGE_SIZE })
+    if (genRef.current === gen && page) {
+      setItems((prev) => [...prev, ...page.items])
+      setTotal(page.total)
+    }
+    busyRef.current = false
+  }
+
+  const virt = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 44,
+    overscan: 20,
+  })
+
+  const onScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    if (el.scrollTop + el.clientHeight >= virt.getTotalSize() - 900) void loadMore()
+  }
+
+  const open = (r: GlobalSearchItem) => {
+    const entry = itemToFileEntry(r)
+    if (!entry) {
+      useUi.getState().toast('该项不在已挂载的磁盘根内,无法打开', 'error')
+      return
+    }
+    onOpen(entry)
+  }
+
+  const { icon: Icon, cls } = GROUP_STYLE[group]
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-brd bg-panel px-3">
+        <button onClick={onBack} className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-txt2 hover:bg-hover hover:text-txt">
+          <Home className="h-4 w-4" /> 主页
+        </button>
+        <ChevronRight className="h-4 w-4 text-txt2" />
+        <span className={`flex h-7 w-7 items-center justify-center rounded-md ${cls}`}>
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className="text-sm font-medium">{group}</span>
+        <span className="text-xs text-txt2">
+          {loading && !items.length
+            ? '加载中…'
+            : `共 ${total.toLocaleString()} 项${idxBuilding ? '(索引构建中,当前为部分结果)' : ''}`}
+        </span>
+        <span className="flex-1" />
+        <SortControls sort={sort} asc={asc} onSort={setSort} onToggleAsc={() => setAsc((v) => !v)} />
+      </div>
+      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">
+        <div style={{ height: virt.getTotalSize(), position: 'relative' }}>
+          {virt.getVirtualItems().map((vi) => {
+            const r = items[vi.index]
+            return (
+              <div
+                key={r.path}
+                style={{ transform: `translateY(${vi.start}px)`, position: 'absolute', width: '100%', top: 0, left: 0 }}
+              >
+                <GroupRow name={r.name} path={r.path} size={r.size} modified={r.modified} onClick={() => open(r)} />
+              </div>
+            )
+          })}
+        </div>
+        {!items.length && !loading && (
+          <div className="flex h-32 items-center justify-center text-sm text-txt2">
+            {idxBuilding ? '索引构建中,完成后自动显示' : '该分类暂无文件'}
+          </div>
+        )}
+        {items.length > 0 && items.length >= total && (
+          <div className="py-3 text-center text-[11px] text-txt2">已显示全部 {total.toLocaleString()} 项</div>
+        )}
+        {loading && items.length > 0 && (
+          <div className="flex items-center justify-center gap-2 py-3 text-xs text-txt2">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> 加载中…
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 浏览器/演示版:仅扫描缓存的最近 200 条,排序只作用于这部分 */
+function LegacyGroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack(): void; onOpen(e: FileEntry): void }) {
   const scan = useScan()
-  const [sort, setSort] = useState<GroupSort>('time')
+  const [sort, setSort] = useState<GroupSort>('mtime')
+  const [asc, setAsc] = useState(false)
   const items = useMemo(() => {
     const list = [...scan.groups[group].recent]
-    if (sort === 'time') list.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0))
-    else if (sort === 'size') list.sort((a, b) => b.size - a.size)
-    else list.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }))
+    if (sort === 'mtime') list.sort((a, b) => ((a.modified ?? 0) - (b.modified ?? 0)) * (asc ? 1 : -1))
+    else if (sort === 'size') list.sort((a, b) => (a.size - b.size) * (asc ? 1 : -1))
+    else list.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }) * (asc ? 1 : -1))
     return list
-  }, [scan.groups, group, sort])
+  }, [scan.groups, group, sort, asc])
   const scrollRef = useRef<HTMLDivElement>(null)
   const virt = useVirtualizer({
     count: items.length,
@@ -452,22 +674,10 @@ function GroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack(): void
         </span>
         <span className="text-sm font-medium">{group}</span>
         <span className="text-xs text-txt2">
-          {scan.groups[group].count.toLocaleString()} 个 · {fmtBytes(scan.groups[group].size)} · 显示最近 {items.length} 个
+          {scan.groups[group].count.toLocaleString()} 个 · {fmtBytes(scan.groups[group].size)} · 仅显示最近 {items.length} 个
         </span>
         <span className="flex-1" />
-        <span className="shrink-0 text-xs text-txt2">排序</span>
-        <select
-          value={sort}
-          onChange={(e) => setSort(e.target.value as GroupSort)}
-          className="h-7 rounded-md bg-panel2 px-1.5 text-xs outline-none [&>option]:text-black"
-          title="列表排序"
-        >
-          {GROUP_SORTS.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+        <SortControls sort={sort} asc={asc} onSort={setSort} onToggleAsc={() => setAsc((v) => !v)} />
       </div>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
         <div style={{ height: virt.getTotalSize(), position: 'relative' }}>
@@ -476,18 +686,9 @@ function GroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack(): void
             return (
               <div
                 key={e.path}
-                onClick={() => onOpen(e)}
-                className="absolute left-0 top-0 flex w-full cursor-default items-center gap-3 px-5 hover:bg-hover"
-                style={{ height: 44, transform: `translateY(${vi.start}px)` }}
-                title={e.path}
+                style={{ transform: `translateY(${vi.start}px)`, position: 'absolute', width: '100%', top: 0, left: 0 }}
               >
-                <EntryIcon category={categoryOf(e)} />
-                <span className="min-w-0 flex-1 truncate text-[13.5px]">{e.name}</span>
-                <span className="hidden min-w-0 max-w-[45%] flex-1 truncate text-[11px] text-txt2 sm:block">
-                  {parentOf(e.path)}
-                </span>
-                <span className="shrink-0 text-xs text-txt2">{fmtBytes(e.size)}</span>
-                <span className="w-[100px] shrink-0 text-right text-xs text-txt2">{fmtDate(e.modified)}</span>
+                <GroupRow name={e.name} path={e.path} size={e.size} modified={e.modified} onClick={() => onOpen(e)} />
               </div>
             )
           })}
