@@ -2638,6 +2638,7 @@ const indexState = {
   parsing: false, // 持久化文件解析中:entries 含未拆分的原始行,查询/搜索一律返回空
   truncated: false, // 构建触及上限被截断
   counts: null, // { image, video, audio, document, zip, ebook } 每分类计数;v2 数据就绪后才有
+  groupSizes: null, // 每分类容量合计(字节);v2 数据就绪后才有
   lastBuildAt: null,
   roots: [],
   aborted: false,
@@ -2674,24 +2675,27 @@ function indexStatusPayload() {
     lastBuildAt: indexState.lastBuildAt,
     roots: indexState.roots,
     counts: indexState.counts,
+    groupSizes: indexState.groupSizes,
     truncated: indexState.truncated,
   }
 }
 
-/** 每个主页分类的计数(cats 一次线性扫描);仅在 v2 数据就绪后调用 */
-function computeGroupCounts() {
+/** 每个主页分类的计数与容量(cats/sizes 一次线性扫描);仅在 v2 数据就绪后调用 */
+function computeGroupStats() {
   const counts = { image: 0, video: 0, audio: 0, document: 0, zip: 0, ebook: 0 }
+  const sizes = { image: 0, video: 0, audio: 0, document: 0, zip: 0, ebook: 0 }
+  const keys = ['image', 'video', 'audio', 'document', 'zip', 'ebook']
   const cats = indexState.cats
+  const sizesArr = indexState.sizes
   for (let i = 0; i < cats.length; i++) {
     const c = cats[i]
-    if (c === 1) counts.image++
-    else if (c === 2) counts.video++
-    else if (c === 3) counts.audio++
-    else if (c === 4) counts.document++
-    else if (c === 5) counts.zip++
-    else if (c === 6) counts.ebook++
+    if (c >= 1 && c <= 6) {
+      const k = keys[c - 1]
+      counts[k]++
+      sizes[k] += sizesArr[i]
+    }
   }
-  return counts
+  return { counts, sizes }
 }
 
 function broadcastIndex(payload) {
@@ -2802,7 +2806,9 @@ async function loadIndexFile() {
     if (i % 300000 === 299999) await new Promise((r) => setImmediate(r))
   }
   const ok = await rebuildLower(n)
-  indexState.counts = computeGroupCounts()
+  const stats = computeGroupStats()
+  indexState.counts = stats.counts
+  indexState.groupSizes = stats.sizes
   indexState.parsing = false
   // 加载完成广播一次最终状态:渲染层启动早期的 indexStatus 拉取拿到的是 counts=null
   broadcastIndex(indexStatusPayload())
@@ -2889,7 +2895,9 @@ async function buildGlobalIndex() {
       indexState.lastBuildAt = Date.now()
       // 等 lower 副本就绪再解除 building:分类查询的排序依赖它完整
       await rebuildLower(n)
-      indexState.counts = computeGroupCounts()
+      const stats = computeGroupStats()
+      indexState.counts = stats.counts
+      indexState.groupSizes = stats.sizes
       saveIndexFile()
     }
   } finally {
@@ -2970,6 +2978,7 @@ async function indexQuery(opts) {
   const out = { results: [], total: 0, ...indexStatusPayload() }
   if (indexState.parsing) return out // 索引文件解析中:entries 含原始行,直接返回空
   const groupCode = INDEX_GROUPS[opts?.group] ?? 0 // 0 = 不过滤
+  const mediaOnly = opts?.group === 'media' // 六大类任意(主页「最近文件」用)
   const sort = ['name', 'size', 'mtime'].includes(opts?.sort) ? opts.sort : 'mtime'
   const asc = opts?.asc !== false
   const offset = Math.max(0, Number(opts?.offset) || 0)
@@ -2995,7 +3004,7 @@ async function indexQuery(opts) {
   let seen = 0
   for (let k = 0; k < n; k++) {
     const i = asc ? order[k] : order[n - 1 - k]
-    if (groupCode && cats[i] !== groupCode) continue
+    if (mediaOnly ? cats[i] === 0 : groupCode && cats[i] !== groupCode) continue
     if (seen >= offset && out.results.length < limit) out.results.push(make(i))
     seen++
   }

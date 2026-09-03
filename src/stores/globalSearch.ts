@@ -24,6 +24,8 @@ export interface IndexStatus {
   roots: string[]
   /** 每个主页分类的全量计数;仅 v2 索引数据就绪后才有,旧格式/解析中为 null */
   counts?: Record<string, number> | null
+  /** 每个主页分类的容量合计(字节) */
+  groupSizes?: Record<string, number> | null
   /** 构建触及上限被截断 */
   truncated?: boolean
 }
@@ -109,9 +111,9 @@ export interface CategoryPage {
   building: boolean
 }
 
-/** 主页分类列表的分页查询:主进程在全量排序结果上过滤分类后切片 */
+/** 主页分类列表的分页查询:主进程在全量排序结果上过滤分类后切片;group='media' 为六大类任意 */
 export async function queryCategoryPage(opts: {
-  group: 'image' | 'video' | 'audio' | 'document' | 'zip' | 'ebook' | 'all'
+  group: 'image' | 'video' | 'audio' | 'document' | 'zip' | 'ebook' | 'media' | 'all'
   sort: IndexSort
   asc: boolean
   offset: number
@@ -145,6 +147,7 @@ async function runSearch(q: string) {
         lastBuildAt: res.lastBuildAt,
         roots: res.roots,
         counts: res.counts ?? null,
+        groupSizes: res.groupSizes ?? null,
         truncated: !!res.truncated,
       },
     })

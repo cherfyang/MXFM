@@ -57,14 +57,18 @@ function fmtTimeAgo(ts: number | null): string {
 export function HomePage() {
   const scan = useScan()
   const s = useFs()
+  const native = useFs((st) => st.provider?.kind === 'native')
   const indexCounts = useGlobalSearch((st) => st.index.counts)
+  const indexSizes = useGlobalSearch((st) => st.index.groupSizes)
   // 分类展开状态存 scan store(而非组件 useState):打开文件预览会卸载主页组件,
   // 关闭预览返回时靠 store 恢复到原来的分类列表
   const openGroup = scan.openGroup
   const setOpenGroup = scan.setOpenGroup
 
-  // 启动自动更新:数据缺失或距上次扫描超过 30 分钟时自动重扫
+  // 启动自动扫描(浏览器/演示版):数据缺失或距上次扫描超过 30 分钟时自动重扫。
+  // 桌面版不扫描:分类计数/容量/最近文件全部来自全盘索引,避免每次启动的一次全盘遍历。
   useEffect(() => {
+    if (native && indexApi()) return
     const stale = !scan.lastScanAt || Date.now() - scan.lastScanAt > 30 * 60 * 1000
     if (stale && !scan.running) void scan.scan()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -75,12 +79,36 @@ export function HomePage() {
     const gid = GROUP_INDEX_ID[name]
     return indexCounts?.[gid] ?? scan.groups[name].count
   }
+  const sizeOf = (name: ScanGroup) => {
+    const gid = GROUP_INDEX_ID[name]
+    return indexSizes?.[gid] ?? scan.groups[name].size
+  }
 
-  const recents = useMemo(() => {
+  // 「最近文件」:桌面版走索引(全盘六大类按修改时间);浏览器/演示版回退扫描缓存
+  const hasIndexCounts = !!indexCounts
+  const [indexRecents, setIndexRecents] = useState<FileEntry[] | null>(null)
+  useEffect(() => {
+    if (!native || !indexApi()) return
+    let alive = true
+    void queryCategoryPage({ group: 'media', sort: 'mtime', asc: false, offset: 0, limit: 20 })
+      .then((p) => {
+        if (!alive) return
+        setIndexRecents(
+          (p?.items ?? []).map(itemToFileEntry).filter((e): e is FileEntry => e !== null)
+        )
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [native, hasIndexCounts])
+
+  const scanRecents = useMemo(() => {
     const all: FileEntry[] = []
     for (const g of Object.values(scan.groups)) all.push(...g.recent)
     return all.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0)).slice(0, 20)
   }, [scan.groups])
+  const recents = native ? indexRecents ?? [] : scanRecents
 
   const open = (e: FileEntry) => s.openEntry(e)
 
@@ -102,19 +130,31 @@ export function HomePage() {
           <div className="min-w-0 flex-1">
             <div className="text-lg font-semibold">主页</div>
             <div className="text-xs text-txt2">
-              {scan.running
-                ? `正在扫描本机文件… 已检查 ${scan.scannedDirs} 个文件夹`
-                : `共发现 ${totalFiles.toLocaleString()} 个媒体/文档文件 · 上次扫描:${fmtTimeAgo(scan.lastScanAt)}`}
+              {native && indexCounts
+                ? `共发现 ${totalFiles.toLocaleString()} 个媒体/文档文件 · 全盘索引(上次构建 ${fmtTimeAgo(useGlobalSearch.getState().index.lastBuildAt)})`
+                : scan.running
+                  ? `正在扫描本机文件… 已检查 ${scan.scannedDirs} 个文件夹`
+                  : `共发现 ${totalFiles.toLocaleString()} 个媒体/文档文件 · 上次扫描:${fmtTimeAgo(scan.lastScanAt)}`}
             </div>
           </div>
-          <button
-            onClick={() => void scan.scan()}
-            disabled={scan.running}
-            className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-acc px-4 text-sm text-white hover:opacity-90 disabled:opacity-50"
-          >
-            {scan.running ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {scan.running ? '扫描中' : '重新扫描'}
-          </button>
+          {native && indexCounts ? (
+            <button
+              onClick={() => useGlobalSearch.getState().rebuild()}
+              disabled={useGlobalSearch.getState().index.building}
+              className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-acc px-4 text-sm text-white hover:opacity-90 disabled:opacity-50"
+            >
+              <RefreshCw className="h-4 w-4" /> 重建索引
+            </button>
+          ) : (
+            <button
+              onClick={() => void scan.scan()}
+              disabled={scan.running}
+              className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-acc px-4 text-sm text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {scan.running ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {scan.running ? '扫描中' : '重新扫描'}
+            </button>
+          )}
         </div>
 
         {scan.running && (
@@ -143,7 +183,7 @@ export function HomePage() {
                 <span className="mt-1 w-full truncate text-xl font-semibold tabular-nums">{n.toLocaleString()}</span>
                 <span className="flex w-full items-center justify-between text-xs text-txt2">
                   <span>{name}</span>
-                  <span>{n > 0 ? fmtBytes(g.size) : '—'}</span>
+                  <span>{n > 0 ? fmtBytes(sizeOf(name)) : '—'}</span>
                 </span>
               </button>
             )
@@ -155,13 +195,21 @@ export function HomePage() {
         {/* 最近文件 */}
         <div className="mb-2 flex items-center justify-between">
           <div className="text-sm font-medium">最近文件</div>
-          <div className="text-xs text-txt2">来自上次扫描,点击直接打开</div>
+          <div className="text-xs text-txt2">{native ? '全盘最近修改,点击直接打开' : '来自上次扫描,点击直接打开'}</div>
         </div>
         <div className="overflow-hidden rounded-xl border border-brd bg-panel">
           {recents.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-10 text-txt2">
               <FolderOpen className="h-8 w-8 opacity-40" />
-              <div className="text-sm">{scan.running ? '扫描完成后显示' : '还没有扫描结果,点击右上角「重新扫描」'}</div>
+              <div className="text-sm">
+                {native
+                  ? indexRecents
+                    ? '暂无最近文件'
+                    : '索引加载中…'
+                  : scan.running
+                    ? '扫描完成后显示'
+                    : '还没有扫描结果,点击右上角「重新扫描」'}
+              </div>
             </div>
           ) : (
             recents.map((e, i) => (

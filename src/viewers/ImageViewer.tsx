@@ -38,8 +38,8 @@ function LazyEditor({ url, entry, onClose }: { url: string; entry: import('../fs
     <Comp
       source={url}
       onClose={onClose}
-      language="zh"
-      translations={{ zh: IMAGE_EDITOR_ZH }}
+      // 该版本的 translations 是「扁平键值覆盖表」(直接覆盖英文默认文案),不按语言嵌套
+      translations={IMAGE_EDITOR_ZH}
       defaultSavedImageType="png"
       defaultSavedImageName={entry.name.replace(/\.[^.]+$/, '') + '-edited'}
       onSave={async (res: { imageBase64?: string; fullName?: string }) => {
