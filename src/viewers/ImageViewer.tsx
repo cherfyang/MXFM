@@ -15,6 +15,7 @@ import type { ViewerProps } from './registry'
 import { useBlobUrl } from './registry'
 import { useFs } from '../stores/fs'
 import { useUi } from '../stores/ui'
+import { useSettings } from '../stores/settings'
 import { IconBtn } from '../components/ui'
 
 function LazyEditor({ url, entry, onClose }: { url: string; entry: import('../fs/types').FileEntry; onClose(): void }) {
@@ -60,6 +61,7 @@ function LazyEditor({ url, entry, onClose }: { url: string; entry: import('../fs
 
 export function ImageViewer({ entry, nav }: ViewerProps) {
   const url = useBlobUrl(entry)
+  const showCheckerboard = useSettings((s) => s.showCheckerboard)
   const [editorOpen, setEditorOpen] = useState(false)
   const [scale, setScale] = useState(1)
   const [rot, setRot] = useState(0)
@@ -230,7 +232,7 @@ export function ImageViewer({ entry, nav }: ViewerProps) {
         </>
       )}
 
-      <div className="checker h-full overflow-auto" onWheel={onWheel}>
+      <div className={`${showCheckerboard ? 'checker' : ''} h-full overflow-auto`} onWheel={onWheel}>
         {!url ? (
           <div className="flex h-full items-center justify-center text-txt2">
             <Loader2 className="h-6 w-6 animate-spin" />

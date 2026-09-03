@@ -25,6 +25,7 @@ import {
   FolderSearch,
   Folder,
   File,
+  Grid3x3,
 } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { useSearch, type SearchResultItem } from '../stores/search'
@@ -517,6 +518,11 @@ export function openMoreMenu(x?: number, y?: number) {
       label: `单击打开:${st.singleClickOpen ? '开' : '关'}`,
       icon: <MousePointerClick className="h-4 w-4" />,
       onClick: () => useSettings.getState().toggle('singleClickOpen'),
+    },
+    {
+      label: `透明背景棋盘格:${st.showCheckerboard ? '开' : '关'}`,
+      icon: <Grid3x3 className="h-4 w-4" />,
+      onClick: () => useSettings.getState().toggle('showCheckerboard'),
     },
     { sep: true },
     ...themeItems,

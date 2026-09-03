@@ -47,8 +47,10 @@ interface SettingsState {
   execSafeModeSystemDirs: boolean
   /** 是否显示角标(安装包/脚本) */
   execShowBadges: boolean
+  /** 透明图片背景棋盘格:true=显示 false=隐藏(默认隐藏)。文件列表缩略图与图片查看器共用 */
+  showCheckerboard: boolean
   set<K extends keyof SettingsState>(key: K, value: SettingsState[K]): void
-  toggle(key: 'viewMode' | 'foldersFirst' | 'showHidden' | 'singleClickOpen' | 'sidebarVisible' | 'previewVisible'): void
+  toggle(key: 'viewMode' | 'foldersFirst' | 'showHidden' | 'singleClickOpen' | 'sidebarVisible' | 'previewVisible' | 'showCheckerboard'): void
 }
 
 export const useSettings = create<SettingsState>()(
@@ -68,6 +70,7 @@ export const useSettings = create<SettingsState>()(
       execScriptDefault: 'view',
       execSafeModeSystemDirs: true,
       execShowBadges: true,
+      showCheckerboard: false,
       set: (key, value) => set({ [key]: value } as Partial<SettingsState>),
       toggle: (key) => set({ [key]: !get()[key] } as Partial<SettingsState>),
     }),
@@ -86,6 +89,7 @@ export const useSettings = create<SettingsState>()(
           s.execScriptDefault ??= 'view'
           s.execSafeModeSystemDirs ??= true
           s.execShowBadges ??= true
+          s.showCheckerboard ??= false
         }
         return s as unknown as SettingsState
       },

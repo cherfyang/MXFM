@@ -650,6 +650,7 @@ function Tile({
 }) {
   const thumb = useThumb(entry)
   const isImage = categoryOf(entry) === 'image'
+  const showCheckerboard = useSettings((s) => s.showCheckerboard)
   return (
     <div
       draggable={!renaming}
@@ -683,7 +684,7 @@ function Tile({
       } ${dropping ? 'ring-2 ring-acc bg-sel/50' : ''}`}
       style={{ width: TILE_W, height: TILE_H - 12 }}
     >
-      <div className="checker flex h-[68px] w-full items-center justify-center overflow-hidden rounded-md">
+      <div className={`${showCheckerboard ? 'checker' : ''} flex h-[68px] w-full items-center justify-center overflow-hidden rounded-md`}>
         {isImage && thumb ? (
           <img src={thumb} alt="" className="max-h-[68px] max-w-full object-contain" draggable={false} />
         ) : (
