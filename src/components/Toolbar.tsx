@@ -27,6 +27,9 @@ import {
   File,
   Grid3x3,
   AppWindow,
+  ArrowUpDown,
+  ArrowUpNarrowWide,
+  ArrowDownWideNarrow,
 } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { useSearch, type SearchResultItem } from '../stores/search'
@@ -106,6 +109,16 @@ export function Toolbar() {
               onClick={() => st.toggle('viewMode')}
             >
               {st.viewMode === 'details' ? <LayoutGrid className="h-4.5 w-4.5" /> : <List className="h-4.5 w-4.5" />}
+            </IconBtn>
+            <IconBtn
+              title="排序方式"
+              disabled={!path || path === HOME_PATH || viewOpen}
+              onClick={(e) => {
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                openSortMenu(r.left, r.bottom + 4)
+              }}
+            >
+              <ArrowUpDown className="h-4.5 w-4.5" />
             </IconBtn>
             <IconBtn title="预览面板 (空格)" active={st.previewVisible} onClick={() => st.toggle('previewVisible')}>
               <PanelRight className="h-4.5 w-4.5" />
@@ -485,6 +498,39 @@ function MoreMenu() {
       <MoreHorizontal className="h-5 w-5 md:h-4.5 md:w-4.5" />
     </IconBtn>
   )
+}
+
+/** 打开「排序方式」菜单;工具栏按钮与空白菜单(fs.ts)共用同一份排序语义 */
+export function openSortMenu(x?: number, y?: number) {
+  const st = useSettings.getState()
+  const check = (on: boolean) => (on ? '✓ ' : '')
+  const sortItem = (label: string, key: 'name' | 'size' | 'modified' | 'type', asc: boolean) => ({
+    label: `${check(st.sortKey === key && st.sortAsc === asc)}${label}`,
+    onClick: () => {
+      const s = useSettings.getState()
+      s.set('sortKey', key)
+      s.set('sortAsc', asc)
+    },
+  })
+  useUi.getState().openMenu(x ?? window.innerWidth - 240, y ?? 52, [
+    sortItem('名称 升序', 'name', true),
+    sortItem('名称 降序', 'name', false),
+    { sep: true },
+    sortItem('大小 从大到小', 'size', false),
+    sortItem('大小 从小到大', 'size', true),
+    { sep: true },
+    sortItem('修改时间 从新到旧', 'modified', false),
+    sortItem('修改时间 从旧到新', 'modified', true),
+    { sep: true },
+    sortItem('类型', 'type', true),
+    { sep: true },
+    { label: `${check(st.foldersFirst)}文件夹优先`, onClick: () => useSettings.getState().set('foldersFirst', !st.foldersFirst) },
+    {
+      label: st.sortAsc ? '当前:升序(点击切换整体方向)' : '当前:降序(点击切换整体方向)',
+      icon: st.sortAsc ? <ArrowUpNarrowWide className="h-4 w-4" /> : <ArrowDownWideNarrow className="h-4 w-4" />,
+      onClick: () => useSettings.getState().set('sortAsc', !st.sortAsc),
+    },
+  ])
 }
 
 /** 打开「更多选项」菜单;供工具栏按钮与全局快捷键(Ctrl/Cmd+,)共用 */

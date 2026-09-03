@@ -224,7 +224,12 @@ export default function App() {
       }
       if (mod && e.key.toLowerCase() === 'f') {
         e.preventDefault()
-        document.getElementById('mx-search')?.focus()
+        if (e.shiftKey) {
+          // Ctrl/Cmd+Shift+F 全局搜索
+          ui.showDialog({ type: 'globalSearch' })
+        } else {
+          document.getElementById('mx-search')?.focus()
+        }
         return
       }
       if (mod && e.key.toLowerCase() === 'z') {

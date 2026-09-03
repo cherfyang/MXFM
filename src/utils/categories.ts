@@ -108,6 +108,29 @@ export const EDITABLE_CATEGORIES: Set<Category> = new Set(['text', 'code', 'mark
 /** 可启动类别:双击语义是运行(经主进程分级确认) */
 export const LAUNCHABLE_CATEGORIES: Set<Category> = new Set(['executable', 'installer'])
 
+/**
+ * 默认打开方式可配置的"大类":比单个扩展名粗,比全部 Category 粒度更适合用户直觉,
+ * 比如「视频都用 PotPlayer 打开」「PDF 用系统默认」。按列表顺序命中 entry 的第一个分类。
+ */
+export const OPEN_WITH_CATEGORIES: { id: string; label: string; cats: Category[] }[] = [
+  { id: 'video', label: '视频', cats: ['video'] },
+  { id: 'audio', label: '音频', cats: ['audio'] },
+  { id: 'image', label: '图片', cats: ['image'] },
+  { id: 'ebook', label: '电子书', cats: ['ebook'] },
+  { id: 'document', label: '文档 (PDF/Word/PPT/MD)', cats: ['pdf', 'word', 'ppt', 'legacy', 'markdown'] },
+  { id: 'sheet', label: '表格 (Excel/CSV)', cats: ['excel', 'csv'] },
+  { id: 'zip', label: '压缩包', cats: ['zip'] },
+  { id: 'text', label: '文本/代码', cats: ['text', 'code'] },
+]
+
+/** entry 分类 → 大类 id;不在任何可配置大类中返回 null */
+export function openWithCategoryOf(cat: Category): string | null {
+  for (const g of OPEN_WITH_CATEGORIES) {
+    if (g.cats.includes(cat)) return g.id
+  }
+  return null
+}
+
 /** 脚本扩展名:保留在 code 类(可编辑),但双击语义按设置可改为运行 */
 const SCRIPT_EXTS = new Set(['bat', 'cmd', 'ps1', 'sh', 'bash'])
 

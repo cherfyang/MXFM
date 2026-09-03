@@ -17,6 +17,7 @@ import { useFs } from '../stores/fs'
 import { useUi } from '../stores/ui'
 import { useSettings } from '../stores/settings'
 import { IconBtn } from '../components/ui'
+import { IMAGE_EDITOR_ZH } from './imageEditorZh'
 
 function LazyEditor({ url, entry, onClose }: { url: string; entry: import('../fs/types').FileEntry; onClose(): void }) {
   const [Comp, setComp] = useState<React.ComponentType<Record<string, unknown>> | null>(null)
@@ -37,6 +38,8 @@ function LazyEditor({ url, entry, onClose }: { url: string; entry: import('../fs
     <Comp
       source={url}
       onClose={onClose}
+      language="zh"
+      translations={{ zh: IMAGE_EDITOR_ZH }}
       defaultSavedImageType="png"
       defaultSavedImageName={entry.name.replace(/\.[^.]+$/, '') + '-edited'}
       onSave={async (res: { imageBase64?: string; fullName?: string }) => {

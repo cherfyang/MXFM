@@ -56,6 +56,9 @@ function createWindow() {
     },
   })
   wins.add(w)
+  // webContents 引用必须在窗口存活时先取好:closed 触发时窗口已销毁,
+  // 再访问 w.webContents 会抛 "Object has been destroyed"
+  const wc = w.webContents
   if (saved?.maximized) w.maximize()
   if (app.isPackaged) {
     w.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
@@ -78,7 +81,7 @@ function createWindow() {
   w.on('closed', () => {
     wins.delete(w)
     // 该窗口挂的目录监听一并停掉,不留死句柄(见 watch 模块,按 sender 记账)
-    stopWatchersOfSender(w.webContents)
+    stopWatchersOfSender(wc)
   })
   return w
 }
@@ -2611,6 +2614,226 @@ ipcMain.on('search:cancel', (_e, payload) => {
   if (s) s.aborted = true
 })
 
+// ---------- 全局搜索索引(Everything 式) ----------
+// 契约:
+//   index:status              → { building, count, lastBuildAt, roots }
+//   index:rebuild             → 立即返回 true;后台重建,进度经 index:progress 推送(广播到全部窗口)
+//   index:search { pattern, limit } → { results:[{name,path,isDir,size,modified}], total, truncated, building, count, lastBuildAt }
+// 实现:全盘 BFS walk(并发 8),内存索引每条只存一个规范化路径字符串(目录以 '/' 结尾);
+// 持久化到 userData/global-index.jsonl,启动时先加载旧索引再按新旧决定是否后台重建。
+// 搜索:大小写不敏感;纯子串时按 精确 > 前缀 > 包含 排序;含 * ? 按通配符。
+// size/mtime 不进索引(省一半构建时间),返回结果页时再补 stat。
+
+const indexState = {
+  entries: [], // 本机绝对路径,统一 '/' 分隔;目录以 '/' 结尾
+  lower: [], // entries 的小写副本,搜索期避免每次按键重复 toLowerCase
+  building: false,
+  lastBuildAt: null,
+  roots: [],
+  aborted: false,
+}
+const INDEX_LIMITS = { maxDirs: 400000, maxEntries: 1500000, maxDepth: 24, concurrency: 8, progressEvery: 2000 }
+const INDEX_SKIP_DIRS = new Set([
+  '$recycle.bin', 'system volume information', 'config.msi', 'recovery',
+  'node_modules', '.git', 'windowsapps', 'perflogs', 'volumes',
+])
+
+function indexFilePath() {
+  return path.join(app.getPath('userData'), 'global-index.jsonl')
+}
+
+function indexStatusPayload() {
+  return {
+    building: indexState.building,
+    count: indexState.entries.length,
+    lastBuildAt: indexState.lastBuildAt,
+    roots: indexState.roots,
+  }
+}
+
+function broadcastIndex(payload) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) {
+      try {
+        w.webContents.send('index:progress', payload)
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+function saveIndexFile() {
+  try {
+    const tmp = indexFilePath() + '.tmp'
+    const ws = fs.createWriteStream(tmp, 'utf8')
+    for (const line of indexState.entries) ws.write(line + '\n')
+    ws.end(() => {
+      fs.rename(tmp, indexFilePath(), () => {})
+    })
+  } catch {
+    /* 索引写盘失败不影响使用,下次启动重建 */
+  }
+}
+
+function loadIndexFile() {
+  try {
+    const raw = fs.readFileSync(indexFilePath(), 'utf8')
+    const entries = raw.split('\n').filter(Boolean)
+    if (!entries.length) return false
+    indexState.entries = entries
+    indexState.lower = entries.map((e) => e.toLowerCase())
+    indexState.lastBuildAt = fs.statSync(indexFilePath()).mtimeMs
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function buildGlobalIndex() {
+  if (indexState.building) return
+  indexState.building = true
+  indexState.aborted = false
+  let dirs = 0
+  try {
+    const roots = await probeRoots()
+    indexState.roots = roots.map((r) => r.name)
+    const entries = []
+    const queue = roots.map((r) => ({ dir: r.path, depth: 0 }))
+
+    const join = (dir, name) => (dir.endsWith('/') ? dir + name : dir + '/' + name)
+
+    async function worker() {
+      while (queue.length) {
+        if (indexState.aborted || dirs >= INDEX_LIMITS.maxDirs || entries.length >= INDEX_LIMITS.maxEntries) return
+        const item = queue.shift()
+        if (!item || item.depth > INDEX_LIMITS.maxDepth) continue
+        dirs++
+        let names
+        try {
+          names = await fsp.readdir(item.dir, { withFileTypes: true })
+        } catch {
+          continue
+        }
+        for (const e of names) {
+          const full = join(item.dir, e.name)
+          if (e.isDirectory()) {
+            const lower = e.name.toLowerCase()
+            if (INDEX_SKIP_DIRS.has(lower) || e.name.startsWith('.') || e.name.startsWith('$')) continue
+            entries.push(full + '/')
+            if (item.depth + 1 <= INDEX_LIMITS.maxDepth) queue.push({ dir: full, depth: item.depth + 1 })
+          } else {
+            entries.push(full)
+          }
+        }
+        if (dirs % INDEX_LIMITS.progressEvery === 0) {
+          broadcastIndex({ building: true, count: entries.length, roots: indexState.roots })
+          // 让出事件循环,避免 IPC/窗口操作被饿死
+          await new Promise((r) => setImmediate(r))
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: INDEX_LIMITS.concurrency }, () => worker()))
+    if (!indexState.aborted) {
+      indexState.entries = entries
+      indexState.lower = entries.map((e) => e.toLowerCase())
+      indexState.lastBuildAt = Date.now()
+      saveIndexFile()
+    }
+  } finally {
+    indexState.building = false
+    broadcastIndex(indexStatusPayload())
+  }
+}
+
+function startGlobalIndexBuild() {
+  void buildGlobalIndex().catch(() => {
+    indexState.building = false
+  })
+}
+
+/** 结果页补 stat(索引里没有 size/mtime);一次最多 limit 条,成本可忽略 */
+async function statResults(results) {
+  await Promise.all(
+    results.map(async (r) => {
+      if (r.isDir) return
+      try {
+        const st = await fsp.stat(r.path)
+        r.size = st.size
+        r.modified = st.mtimeMs
+      } catch {
+        /* 竞态删除:保留 size=0 */
+      }
+    })
+  )
+  return results
+}
+
+async function indexSearch(opts) {
+  const pattern = typeof opts?.pattern === 'string' ? opts.pattern.trim() : ''
+  const limit = Math.max(1, Math.min(Number(opts?.limit) || 500, 2000))
+  const out = { results: [], total: 0, truncated: false, ...indexStatusPayload() }
+  if (!pattern) return out
+  const wild = /[*?]/.test(pattern)
+  let re = null
+  if (wild) {
+    re = new RegExp(
+      '^' + pattern.split(/(\*|\?)/).map((x) => (x === '*' ? '.*' : x === '?' ? '.' : escapeRegex(x))).join('') + '$',
+      'i'
+    )
+  }
+  const lower = pattern.toLowerCase()
+  const exact = []
+  const prefix = []
+  const incl = []
+  const entries = indexState.entries
+  const lowered = indexState.lower
+  for (let i = 0; i < entries.length; i++) {
+    const full = entries[i]
+    const isDir = full.endsWith('/')
+    const name = isDir ? full.slice(0, -1) : full
+    const sep = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'))
+    const base = name.slice(sep + 1)
+    let rank = 0
+    if (wild) {
+      if (re.test(base)) rank = base.length === pattern.length ? 3 : 1
+    } else {
+      const lb = lowered[i]
+      // base 与 lowered 同偏移:full 尾部就是 base(目录标记已剥)
+      const lbBase = isDir ? lb.slice(0, -1) : lb
+      const lbBaseLower = lbBase.slice(sep + 1)
+      if (lbBaseLower === lower) rank = 3
+      else if (lbBaseLower.startsWith(lower)) rank = 2
+      else if (lbBaseLower.includes(lower)) rank = 1
+    }
+    if (!rank) continue
+    // 索引内部统一 '/' 分隔;返回给渲染层前转回本机分隔符(toVirtualPath 期望本机风格)
+    ;(rank === 3 ? exact : rank === 2 ? prefix : incl).push({
+      name: base,
+      path: process.platform === 'win32' ? name.replace(/\//g, '\\') : name,
+      isDir,
+      size: 0,
+      modified: null,
+    })
+    if (exact.length >= limit && prefix.length >= limit && incl.length >= limit) break
+  }
+  const ordered = [...exact, ...prefix, ...incl]
+  out.total = ordered.length
+  out.truncated = ordered.length > limit
+  out.results = await statResults(ordered.slice(0, limit))
+  return out
+}
+
+ipcMain.handle('index:status', () => indexStatusPayload())
+
+ipcMain.handle('index:rebuild', () => {
+  if (!indexState.building) startGlobalIndexBuild()
+  return true
+})
+
+ipcMain.handle('index:search', (_e, opts) => indexSearch(opts))
+
 // ---------- 程序元数据(版本信息 / 数字签名 / 来源标记)与已安装程序 ----------
 // 契约:
 //   exec:meta(path)         → Promise<ExecMeta>          永不抛错,失败降级成 error 字段
@@ -3162,6 +3385,12 @@ if (!gotSingleLock) {
     cleanTranscodeCache().catch(() => {})
     registerMxfileProtocol()
     createWindow()
+    // 全局搜索索引:先加载上次构建的持久化文件,过期(>12h)或缺失时后台重建
+    {
+      const loaded = loadIndexFile()
+      const stale = !loaded || Date.now() - (indexState.lastBuildAt ?? 0) > 12 * 3600 * 1000
+      if (stale) setTimeout(startGlobalIndexBuild, 4000)
+    }
     app.on('activate', () => {
       // mac dock 点击:窗口全关后复活
       if (wins.size === 0) createWindow()

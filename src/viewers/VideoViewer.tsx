@@ -12,6 +12,8 @@ import {
   Loader2,
   AlertTriangle,
   Subtitles,
+  SkipBack,
+  SkipForward,
 } from 'lucide-react'
 import type { ViewerProps } from './registry'
 import { useBlobUrl } from './registry'
@@ -22,6 +24,91 @@ import { parentOf } from '../utils/path'
 import { useFs } from '../stores/fs'
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
+const VOL_KEY = 'mx-vp-volume'
+const SPEED_KEY = 'mx-vp-speed'
+
+/**
+ * 可拖动进度条:pointerdown 即拖即生效(setPointerCapture 后移出条外也持续跟踪),
+ * 悬停显示时间气泡;带缓冲进度。点击(=按下即抬起)与拖动是同一条路径。
+ */
+function SeekBar({
+  duration,
+  time,
+  buffered,
+  onSeek,
+}: {
+  duration: number
+  time: number
+  buffered: number
+  onSeek(t: number): void
+}) {
+  const barRef = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState(false)
+  const [hoverPct, setHoverPct] = useState<number | null>(null)
+  // 拖动期间 onSeek 会同步 setTime,所以进度直接读 time 即可,无需单独的拖动态时间
+  const pct = duration > 0 ? (time / duration) * 100 : 0
+  const bufPct = duration > 0 ? Math.min(100, (buffered / duration) * 100) : 0
+
+  const timeAt = (clientX: number) => {
+    const rect = barRef.current?.getBoundingClientRect()
+    if (!rect || !duration) return 0
+    return Math.min(duration, Math.max(0, ((clientX - rect.left) / rect.width) * duration))
+  }
+
+  return (
+    <div
+      ref={barRef}
+      className="group relative flex h-4 cursor-pointer items-center touch-none select-none"
+      onPointerDown={(e) => {
+        if (!duration) return
+        // 捕获指针:按下后拖出进度条范围仍持续收到 move/up,实现真正的拖动
+        e.currentTarget.setPointerCapture(e.pointerId)
+        const t = timeAt(e.clientX)
+        setDragging(true)
+        onSeek(t)
+        // 拖动期间挂实时跟踪:move 即 seek
+        const onMove = (ev: PointerEvent) => onSeek(timeAt(ev.clientX))
+        const onUp = () => {
+          setDragging(false)
+          window.removeEventListener('pointermove', onMove)
+          window.removeEventListener('pointerup', onUp)
+          window.removeEventListener('pointercancel', onUp)
+        }
+        window.addEventListener('pointermove', onMove)
+        window.addEventListener('pointerup', onUp)
+        window.addEventListener('pointercancel', onUp)
+      }}
+      onPointerMove={(e) => {
+        const rect = barRef.current?.getBoundingClientRect()
+        if (rect && duration) setHoverPct((e.clientX - rect.left) / rect.width)
+      }}
+      onPointerLeave={() => setHoverPct(null)}
+    >
+      <div className="relative h-1 w-full rounded bg-white/20 transition-all group-hover:h-1.5">
+        {/* 缓冲进度 */}
+        <div className="absolute left-0 top-0 h-full rounded bg-white/25" style={{ width: `${bufPct}%` }} />
+        {/* 播放进度 */}
+        <div className="absolute left-0 top-0 h-full rounded bg-acc" style={{ width: `${pct}%` }} />
+        {/* 拖动手柄:悬停/拖动时放大 */}
+        <div
+          className={`absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-white shadow transition-transform ${
+            dragging ? 'scale-125' : 'scale-0 group-hover:scale-100'
+          }`}
+          style={{ left: `calc(${pct}% - 6px)` }}
+        />
+      </div>
+      {/* 悬停时间气泡 */}
+      {hoverPct !== null && duration > 0 && (
+        <div
+          className="pointer-events-none absolute bottom-5 -translate-x-1/2 rounded bg-black/85 px-1.5 py-0.5 text-[11px] tabular-nums text-white"
+          style={{ left: `${Math.min(96, Math.max(4, hoverPct * 100))}%` }}
+        >
+          {fmtTime(hoverPct * duration)}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function VideoViewer({ entry, nav }: ViewerProps) {
   const url = useBlobUrl(entry)
@@ -30,9 +117,16 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(0)
   const [duration, setDuration] = useState(0)
-  const [vol, setVol] = useState(1)
+  const [buffered, setBuffered] = useState(0)
+  const [vol, setVol] = useState(() => {
+    const v = Number(localStorage.getItem(VOL_KEY))
+    return Number.isFinite(v) && v > 0 ? Math.min(1, v) : 1
+  })
   const [muted, setMuted] = useState(false)
-  const [speed, setSpeed] = useState(1)
+  const [speed, setSpeed] = useState(() => {
+    const v = Number(localStorage.getItem(SPEED_KEY))
+    return SPEEDS.includes(v) ? v : 1
+  })
   const [loop, setLoop] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [ready, setReady] = useState(false)
@@ -53,6 +147,7 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
     setErr(false)
     setTime(0)
     setDuration(0)
+    setBuffered(0)
     setOverrideUrl(null)
     setForcedTranscode(false)
     setSubOn(true)
@@ -111,11 +206,14 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
     }
   }, [posKey])
 
-  // 自动播放 + 恢复进度
+  // 自动播放 + 恢复进度 + 应用记忆的音量/倍速
   useEffect(() => {
     if (!url || !ready) return
     const v = videoRef.current
     if (!v) return
+    v.volume = vol
+    v.muted = muted
+    v.playbackRate = speed
     let saved = 0
     try {
       saved = Number(localStorage.getItem(posKey) ?? 0)
@@ -172,7 +270,7 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
   const seek = (t: number) => {
     const v = videoRef.current
     if (!v) return
-    v.currentTime = t
+    if (Number.isFinite(t)) v.currentTime = t
     setTime(t)
   }
 
@@ -183,6 +281,21 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
     v.muted = x === 0
     setVol(x)
     setMuted(x === 0)
+    try {
+      localStorage.setItem(VOL_KEY, String(x))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const changeSpeed = (x: number) => {
+    setSpeed(x)
+    if (videoRef.current) videoRef.current.playbackRate = x
+    try {
+      localStorage.setItem(SPEED_KEY, String(x))
+    } catch {
+      /* ignore */
+    }
   }
 
   const screenshot = () => {
@@ -246,8 +359,6 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
     }
   }
 
-  const pct = duration > 0 ? (time / duration) * 100 : 0
-
   const nativeNeedsTranscode = !overrideUrl && transcodeAvailable() && VIDEO_NEED_TRANSCODE.has(entry.ext)
   const showTranscode = nativeNeedsTranscode || forcedTranscode
 
@@ -285,6 +396,7 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
           loop={loop}
           className="h-full w-full object-contain"
           onClick={togglePlay}
+          onDoubleClick={() => void toggleFullscreen()}
           onLoadedMetadata={(e) => {
             setDuration(e.currentTarget.duration || 0)
             setReady(true)
@@ -300,6 +412,14 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
               } catch {
                 /* ignore */
               }
+            }
+          }}
+          onProgress={(e) => {
+            const v = e.currentTarget
+            try {
+              if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1))
+            } catch {
+              /* ignore */
             }
           }}
           onPlay={() => setPlaying(true)}
@@ -360,20 +480,21 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
           controlsVisible || !playing ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
       >
-        <div className="relative mb-2 h-1.5 cursor-pointer rounded bg-white/20" onClick={(e) => {
-          const rect = (e.target as HTMLElement).getBoundingClientRect()
-          seek(((e.clientX - rect.left) / rect.width) * duration)
-        }}>
-          <div className="absolute left-0 top-0 h-full rounded bg-acc" style={{ width: `${pct}%` }} />
-          <div
-            className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-white shadow"
-            style={{ left: `calc(${pct}% - 6px)` }}
-          />
-        </div>
-        <div className="flex items-center gap-2 text-white">
+        <SeekBar duration={duration} time={time} buffered={buffered} onSeek={seek} />
+        <div className="mt-1 flex items-center gap-2 text-white">
           <button onClick={togglePlay} className="rounded p-1 hover:bg-white/15" title="播放/暂停 (空格)">
             {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
           </button>
+          {nav && (
+            <>
+              <button onClick={() => nav.onNav(-1)} className="rounded p-1 hover:bg-white/15" title="上一个">
+                <SkipBack className="h-4.5 w-4.5" />
+              </button>
+              <button onClick={() => nav.onNav(1)} className="rounded p-1 hover:bg-white/15" title="下一个">
+                <SkipForward className="h-4.5 w-4.5" />
+              </button>
+            </>
+          )}
           <span className="text-xs tabular-nums text-white/85">
             {fmtTime(time)} / {fmtTime(duration)}
           </span>
@@ -413,11 +534,7 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
           />
           <select
             value={speed}
-            onChange={(e) => {
-              const x = Number(e.target.value)
-              setSpeed(x)
-              if (videoRef.current) videoRef.current.playbackRate = x
-            }}
+            onChange={(e) => changeSpeed(Number(e.target.value))}
             className="rounded bg-white/10 px-1 py-0.5 text-xs outline-none [&>option]:text-black"
             title="倍速"
           >

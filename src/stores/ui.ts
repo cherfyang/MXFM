@@ -56,6 +56,11 @@ export interface OpenWithDialog {
   type: 'openWith'
 }
 
+/** 全局搜索(Everything 式全盘文件名搜索) */
+export interface GlobalSearchDialog {
+  type: 'globalSearch'
+}
+
 export type DialogState =
   | ConfirmDialog
   | PromptDialog
@@ -65,6 +70,7 @@ export type DialogState =
   | TrashDialog
   | ExecPolicyDialog
   | OpenWithDialog
+  | GlobalSearchDialog
 
 export type MenuItem =
   | { sep: true }

@@ -805,8 +805,9 @@ export const useFs = create<FsState>()((set, get) => {
         void launchEntry(entry)
         return
       }
-      // 普通文件按扩展名设置分流:system=系统默认 app=指定应用 internal=内置查看器
-      const target = useSettings.getState().getOpenWith(extOf(entry.name))
+      // 普通文件按打开方式设置分流(扩展名配置 → 类型配置 → 内置查看器):
+      // system=系统默认 app=指定应用 internal=内置查看器
+      const target = useSettings.getState().getOpenWithForEntry(entry)
       if (target.kind === 'system') {
         if (s.provider?.openInSystem) {
           s.provider

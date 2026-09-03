@@ -4,9 +4,11 @@ import { useUi } from '../stores/ui'
 import { useFs } from '../stores/fs'
 import { useTrash } from '../stores/trash'
 import { useSettings, normalizeExt, type OpenWithTarget } from '../stores/settings'
+import { OPEN_WITH_CATEGORIES } from '../utils/categories'
 import { fmtBytes, fmtDate } from '../utils/format'
 import { thumbCacheStats } from './FileList'
 import { Btn } from './ui'
+import { GlobalSearchDialog } from './GlobalSearchDialog'
 
 export function Dialogs() {
   const dialog = useUi((s) => s.dialog)
@@ -19,6 +21,7 @@ export function Dialogs() {
   if (dialog.type === 'trash') return <TrashDialog />
   if (dialog.type === 'execPolicy') return <ExecPolicyDialog />
   if (dialog.type === 'openWith') return <OpenWithDialog />
+  if (dialog.type === 'globalSearch') return <GlobalSearchDialog />
   return <ConflictDialog {...dialog} />
 }
 
@@ -483,7 +486,7 @@ function TrashDialog() {
   )
 }
 
-/** 默认打开方式管理:按扩展名指定用内置查看器/系统默认/指定应用打开 */
+/** 默认打开方式管理:按扩展名/按类型(视频、图片…)指定用内置查看器/系统默认/指定应用打开 */
 function OpenWithDialog() {
   const st = useSettings()
   const fs = useFs()
@@ -492,7 +495,7 @@ function OpenWithDialog() {
   const provider = fs.provider
   const canPick = provider?.kind === 'native' && typeof provider.pickOpenWithApp === 'function'
 
-  const setTarget = async (key: string, target: OpenWithTarget) => {
+  const setTarget = async (apply: (t: OpenWithTarget) => void, target: OpenWithTarget) => {
     if (target.kind === 'app') {
       if (!canPick) {
         useUi.getState().toast('当前环境不支持选择应用', 'error')
@@ -502,23 +505,13 @@ function OpenWithDialog() {
         const appPath = await provider.pickOpenWithApp!()
         if (!appPath) return
         const appName = appPath.replace(/\\/g, '/').split('/').pop() || appPath
-        st.setOpenWith(key, { kind: 'app', appPath, appName })
+        apply({ kind: 'app', appPath, appName })
       } catch (e) {
         useUi.getState().toast(String((e as Error).message || e), 'error')
       }
       return
     }
-    st.setOpenWith(key, target)
-  }
-
-  const add = async (target: OpenWithTarget) => {
-    const key = normalizeExt(ext)
-    if (!key) {
-      useUi.getState().toast('请输入有效的扩展名', 'error')
-      return
-    }
-    await setTarget(key, target)
-    setExt('')
+    apply(target)
   }
 
   const labelOf = (t: OpenWithTarget) => {
@@ -527,7 +520,19 @@ function OpenWithDialog() {
     return t.appName || t.appPath
   }
 
-  const entries = Object.entries(st.openWith).sort(([a], [b]) => a.localeCompare(b))
+  const extEntries = Object.entries(st.openWith).sort(([a], [b]) => a.localeCompare(b))
+  const catEntries = OPEN_WITH_CATEGORIES.map((g) => ({ ...g, target: st.openWithCategory[g.id] }))
+
+  /** 按输入框里的扩展名添加;为空时提示 */
+  const addByExt = (target: OpenWithTarget) => {
+    const key = normalizeExt(ext)
+    if (!key) {
+      useUi.getState().toast('请输入有效的扩展名', 'error')
+      return
+    }
+    void setTarget((t) => st.setOpenWith(key, t), target)
+    setExt('')
+  }
 
   return (
     <div
@@ -536,7 +541,7 @@ function OpenWithDialog() {
     >
       <div
         className="mx-fade flex w-[min(560px,calc(100vw-24px))] flex-col rounded-xl border border-brd bg-panel shadow-2xl shadow-black/30"
-        style={{ maxHeight: '70vh' }}
+        style={{ maxHeight: '76vh' }}
       >
         <div className="flex h-11 shrink-0 items-center border-b border-brd px-4">
           <span className="text-[15px] font-semibold">默认打开方式</span>
@@ -546,64 +551,40 @@ function OpenWithDialog() {
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-3">
-          {entries.length === 0 ? (
-            <div className="py-10 text-center text-sm text-txt2">
-              还没有自定义配置
+          {/* 按类型:视频、图片等整体指定打开应用 */}
+          <div className="mb-1.5 text-xs font-medium text-txt2">按类型配置(如:视频都用某个播放器打开)</div>
+          {catEntries.map(({ id, label, target }) => (
+            <TargetRow
+              key={id}
+              title={label}
+              target={target}
+              labelOf={labelOf}
+              canPick={canPick}
+              onSet={(t) => void setTarget((tt) => st.setOpenWithCategory(id, tt), t)}
+              onReset={() => st.setOpenWithCategory(id, null)}
+            />
+          ))}
+
+          {/* 按扩展名:精确到单个格式 */}
+          <div className="mb-1.5 mt-4 text-xs font-medium text-txt2">按扩展名配置(优先级高于类型配置)</div>
+          {extEntries.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-brd py-6 text-center text-sm text-txt2">
+              还没有按扩展名的自定义配置
               <br />
               <span className="text-xs opacity-70">右键文件 → 打开方式,可快速设置</span>
             </div>
           ) : (
-            entries.map(([key, t]) => (
-              <div key={key} className="mb-2 flex items-center gap-2 rounded-lg border border-brd px-3 py-2">
-                <span className="w-24 shrink-0 font-mono text-sm">{key || '(无扩展名)'}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] font-medium" title={labelOf(t)}>
-                    {labelOf(t)}
-                  </div>
-                  {t.kind === 'app' && (
-                    <div className="truncate text-[11px] text-txt2" title={t.appPath}>
-                      {t.appPath}
-                    </div>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <button
-                    title="内置查看器"
-                    onClick={() => st.setOpenWith(key, { kind: 'internal' })}
-                    className={`flex h-7 w-7 items-center justify-center rounded-md ${
-                      t.kind === 'internal' ? 'bg-sel text-acc' : 'text-txt2 hover:bg-hover'
-                    }`}
-                  >
-                    <AppWindow className="h-4 w-4" />
-                  </button>
-                  <button
-                    title="系统默认应用"
-                    onClick={() => setTarget(key, { kind: 'system' })}
-                    className={`flex h-7 w-7 items-center justify-center rounded-md ${
-                      t.kind === 'system' ? 'bg-sel text-acc' : 'text-txt2 hover:bg-hover'
-                    }`}
-                  >
-                    <Monitor className="h-4 w-4" />
-                  </button>
-                  <button
-                    title="其他应用"
-                    onClick={() => void setTarget(key, { kind: 'app', appPath: '', appName: '' })}
-                    className={`flex h-7 w-7 items-center justify-center rounded-md ${
-                      t.kind === 'app' ? 'bg-sel text-acc' : 'text-txt2 hover:bg-hover'
-                    }`}
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                  </button>
-                  <div className="mx-1 h-4 w-px bg-brd" />
-                  <button
-                    title="删除(恢复为内置查看器)"
-                    onClick={() => st.setOpenWith(key, null)}
-                    className="flex h-7 w-7 items-center justify-center rounded-md text-txt2 hover:bg-hover hover:text-danger"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
+            extEntries.map(([key, t]) => (
+              <TargetRow
+                key={key}
+                title={key || '(无扩展名)'}
+                mono
+                target={t}
+                labelOf={labelOf}
+                canPick={canPick}
+                onSet={(tt) => void setTarget((x) => st.setOpenWith(key, x), tt)}
+                onReset={() => st.setOpenWith(key, null)}
+              />
             ))
           )}
         </div>
@@ -612,20 +593,89 @@ function OpenWithDialog() {
             <input
               value={ext}
               onChange={(e) => setExt(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && void add({ kind: 'system' })}
+              onKeyDown={(e) => e.key === 'Enter' && addByExt({ kind: 'system' })}
               placeholder=".txt"
               className="h-8 w-24 rounded-md border border-brd bg-panel2 px-2.5 text-sm outline-none focus:border-acc"
             />
-            <span className="text-xs text-txt2">未列出的扩展名默认使用内置查看器</span>
+            <span className="text-xs text-txt2">未配置的扩展名跟随类型配置,都没有则用内置查看器</span>
           </div>
           <div className="flex items-center gap-2">
-            <Btn onClick={() => void add({ kind: 'internal' })}>添加为内置</Btn>
-            <Btn onClick={() => void add({ kind: 'system' })}>添加为系统默认</Btn>
-            <Btn onClick={() => void add({ kind: 'app', appPath: '', appName: '' })} disabled={!canPick}>
+            <Btn onClick={() => addByExt({ kind: 'internal' })}>添加为内置</Btn>
+            <Btn onClick={() => addByExt({ kind: 'system' })}>添加为系统默认</Btn>
+            <Btn onClick={() => addByExt({ kind: 'app', appPath: '', appName: '' })} disabled={!canPick}>
               添加为其他应用
             </Btn>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+/** 一行「打开方式」配置:标题 + 当前目标 + 内置/系统/其他应用三按钮 + 删除 */
+function TargetRow(props: {
+  title: string
+  mono?: boolean
+  target: OpenWithTarget | undefined
+  labelOf(t: OpenWithTarget): string
+  canPick: boolean
+  onSet(t: OpenWithTarget): void
+  onReset(): void
+}) {
+  const { title, mono, target, labelOf, onSet, onReset } = props
+  const t: OpenWithTarget = target ?? { kind: 'internal' }
+  return (
+    <div className="mb-2 flex items-center gap-2 rounded-lg border border-brd px-3 py-2">
+      <span className={`w-[132px] shrink-0 truncate text-sm ${mono ? 'font-mono' : ''}`} title={title}>
+        {title}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-medium" title={labelOf(t)}>
+          {target ? labelOf(t) : <span className="text-txt2">内置查看器(默认)</span>}
+        </div>
+        {t.kind === 'app' && target && (
+          <div className="truncate text-[11px] text-txt2" title={t.appPath}>
+            {t.appPath}
+          </div>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        <button
+          title="内置查看器"
+          onClick={() => onSet({ kind: 'internal' })}
+          className={`flex h-7 w-7 items-center justify-center rounded-md ${
+            target && t.kind === 'internal' ? 'bg-sel text-acc' : 'text-txt2 hover:bg-hover'
+          }`}
+        >
+          <AppWindow className="h-4 w-4" />
+        </button>
+        <button
+          title="系统默认应用"
+          onClick={() => onSet({ kind: 'system' })}
+          className={`flex h-7 w-7 items-center justify-center rounded-md ${
+            target && t.kind === 'system' ? 'bg-sel text-acc' : 'text-txt2 hover:bg-hover'
+          }`}
+        >
+          <Monitor className="h-4 w-4" />
+        </button>
+        <button
+          title="选择其他应用…"
+          onClick={() => onSet({ kind: 'app', appPath: '', appName: '' })}
+          className={`flex h-7 w-7 items-center justify-center rounded-md ${
+            target && t.kind === 'app' ? 'bg-sel text-acc' : 'text-txt2 hover:bg-hover'
+          }`}
+        >
+          <ExternalLink className="h-4 w-4" />
+        </button>
+        <div className="mx-1 h-4 w-px bg-brd" />
+        <button
+          title="删除(恢复默认)"
+          onClick={onReset}
+          disabled={!target}
+          className="flex h-7 w-7 items-center justify-center rounded-md text-txt2 hover:bg-hover hover:text-danger disabled:opacity-30"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
       </div>
     </div>
   )

@@ -1,8 +1,9 @@
-import { FolderOpen, Plus, X, Zap, MonitorPlay, HardDrive, Home, Trash2 } from 'lucide-react'
+import { FolderOpen, Plus, X, Zap, MonitorPlay, HardDrive, Home, Trash2, Search } from 'lucide-react'
 import { HOME_PATH } from '../stores/scan'
 import { useFs } from '../stores/fs'
 import { useSettings } from '../stores/settings'
 import { useTrash } from '../stores/trash'
+import { useGlobalSearch } from '../stores/globalSearch'
 import { useUi } from '../stores/ui'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { Btn } from './ui'
@@ -38,6 +39,21 @@ export function Sidebar() {
           <Home className="h-4 w-4 shrink-0 text-acc" />
           <span className="flex-1">文件总览</span>
         </div>
+        {s.provider?.kind === 'native' && (
+          <div
+            role="button"
+            onClick={() => {
+              useGlobalSearch.getState().refreshIndex()
+              useUi.getState().showDialog({ type: 'globalSearch' })
+              closeOnMobile()
+            }}
+            className="flex h-9 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] hover:bg-hover md:h-8"
+            title="全盘文件名即时搜索 (Ctrl+Shift+F)"
+          >
+            <Search className="h-4 w-4 shrink-0 text-acc" />
+            <span className="flex-1">全局搜索</span>
+          </div>
+        )}
       </div>
       <div className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-txt2">位置</div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">

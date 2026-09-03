@@ -413,9 +413,24 @@ function AppSection() {
   )
 }
 
+type GroupSort = 'time' | 'size' | 'name'
+
+const GROUP_SORTS: { id: GroupSort; label: string }[] = [
+  { id: 'time', label: '修改时间' },
+  { id: 'size', label: '大小' },
+  { id: 'name', label: '文件名' },
+]
+
 function GroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack(): void; onOpen(e: FileEntry): void }) {
   const scan = useScan()
-  const items = scan.groups[group].recent
+  const [sort, setSort] = useState<GroupSort>('time')
+  const items = useMemo(() => {
+    const list = [...scan.groups[group].recent]
+    if (sort === 'time') list.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0))
+    else if (sort === 'size') list.sort((a, b) => b.size - a.size)
+    else list.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }))
+    return list
+  }, [scan.groups, group, sort])
   const scrollRef = useRef<HTMLDivElement>(null)
   const virt = useVirtualizer({
     count: items.length,
@@ -439,6 +454,20 @@ function GroupList({ group, onBack, onOpen }: { group: ScanGroup; onBack(): void
         <span className="text-xs text-txt2">
           {scan.groups[group].count.toLocaleString()} 个 · {fmtBytes(scan.groups[group].size)} · 显示最近 {items.length} 个
         </span>
+        <span className="flex-1" />
+        <span className="shrink-0 text-xs text-txt2">排序</span>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as GroupSort)}
+          className="h-7 rounded-md bg-panel2 px-1.5 text-xs outline-none [&>option]:text-black"
+          title="列表排序"
+        >
+          {GROUP_SORTS.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.label}
+            </option>
+          ))}
+        </select>
       </div>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
         <div style={{ height: virt.getTotalSize(), position: 'relative' }}>
