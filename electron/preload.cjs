@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('mxAPI', {
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   reveal: (p) => ipcRenderer.invoke('shell:reveal', p),
   openInSystem: (p) => ipcRenderer.invoke('shell:open', p),
+  openWithApp: (p, app) => ipcRenderer.invoke('shell:openWith', p, app),
+  pickOpenWithApp: () => ipcRenderer.invoke('dialog:pickOpenWithApp'),
   memory: () => ipcRenderer.invoke('sys:memory'),
   transcode: (p, kind) => ipcRenderer.invoke('transcode:start', p, kind),
   transcodeCancel: () => ipcRenderer.invoke('transcode:cancel'),

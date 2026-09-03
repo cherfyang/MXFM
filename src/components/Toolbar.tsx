@@ -26,6 +26,7 @@ import {
   Folder,
   File,
   Grid3x3,
+  AppWindow,
 } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { useSearch, type SearchResultItem } from '../stores/search'
@@ -528,6 +529,11 @@ export function openMoreMenu(x?: number, y?: number) {
     ...themeItems,
     ...mobileItems,
     { sep: true },
+    {
+      label: '默认打开方式',
+      icon: <AppWindow className="h-4 w-4" />,
+      onClick: () => useUi.getState().showDialog({ type: 'openWith' }),
+    },
     {
       label: '键盘快捷键',
       icon: <Check className="h-4 w-4" />,

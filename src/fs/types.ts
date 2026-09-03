@@ -50,4 +50,8 @@ export interface FSProvider {
   toNativePath?(path: string): string
   /** 桌面版:用系统默认程序打开(外部应用,如 Word) */
   openInSystem?(path: string): Promise<void>
+  /** 桌面版:用指定外部应用打开文件 */
+  openWithApp?(path: string, appPath: string): Promise<void>
+  /** 桌面版:选择要使用的应用程序 */
+  pickOpenWithApp?(): Promise<string | null>
 }

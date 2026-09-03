@@ -43,6 +43,8 @@ interface Api {
   pickFolder(): Promise<string | null>
   reveal(p: string): Promise<void>
   openInSystem(p: string): Promise<string | null>
+  openWithApp(p: string, appPath: string): Promise<{ ok: boolean; error?: string; pid?: number }>
+  pickOpenWithApp(): Promise<string | null>
   memory(): Promise<{ rss: number; heapUsed: number }>
   /** 批量流式作业(可选:旧版 preload 没有,此时退回逐文件复制) */
   opStart?(payload: {
@@ -135,6 +137,18 @@ export class ElectronProvider implements FSProvider {
     if (this.isMem(path)) throw new Error('演示数据只存在于内存中,无法用系统程序打开')
     const err = await this.api.openInSystem(this.toNative(path))
     if (err) throw new Error(err)
+  }
+
+  /** 用指定外部应用打开文件 */
+  async openWithApp(path: string, appPath: string): Promise<void> {
+    if (this.isMem(path)) throw new Error('演示数据只存在于内存中,无法用系统程序打开')
+    const r = await this.api.openWithApp(this.toNative(path), appPath)
+    if (!r?.ok) throw new Error(r?.error || '启动失败')
+  }
+
+  /** 选择要使用的应用程序,返回本地绝对路径或 null */
+  async pickOpenWithApp(): Promise<string | null> {
+    return this.api.pickOpenWithApp()
   }
 
   /** 主进程内存(RSS) */

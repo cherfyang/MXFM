@@ -733,6 +733,51 @@ ipcMain.handle('shell:open', async (_e, p) => {
   return r || null // 返回非空字符串表示错误信息
 })
 
+/**
+ * 用指定的外部应用打开某个文件。
+ * 安全:filePath 与 appPath 都经过校验;appPath 必须存在且不是普通文件夹(.app bundle 除外);
+ *      执行一律 spawn 数组参数,不拼接命令行。
+ */
+ipcMain.handle('shell:openWith', async (_e, rawFile, rawApp) => {
+  const rp = checkPath(rawFile, false)
+  if (typeof rawApp !== 'string' || !rawApp.trim()) throw new Error('无效的应用程序路径')
+  if (rawApp.includes('\0')) throw new Error('应用路径包含非法字符(NUL)')
+  const appPath = path.resolve(rawApp)
+  let st
+  try {
+    st = await fsp.stat(appPath)
+  } catch {
+    throw new Error('应用程序不存在或无法访问')
+  }
+  if (st.isDirectory() && !isAppBundle(appPath)) {
+    throw new Error('所选目标不是可执行程序')
+  }
+  // macOS .app bundle 必须用 open -a,直接 spawn 会进 bundle 内部语义不对
+  if (process.platform === 'darwin' && (appPath.endsWith('.app') || st.isDirectory())) {
+    const r = await spawnExec('open', ['-a', appPath, rp], { detached: true })
+    return r.ok ? { ok: true, pid: r.pid } : { ok: false, error: mapExecError(r.error) }
+  }
+  const r = await spawnExec(appPath, [rp], { detached: true, windowsHide: true })
+  return r.ok ? { ok: true, pid: r.pid } : { ok: false, error: mapExecError(r.error) }
+})
+
+ipcMain.handle('dialog:pickOpenWithApp', async (event) => {
+  const parent = BrowserWindow.fromWebContents(event.sender)
+  const filters = [{ name: '所有文件', extensions: ['*'] }]
+  if (process.platform === 'win32') {
+    filters.unshift({ name: '可执行程序', extensions: ['exe', 'com', 'cmd', 'bat', 'scr', 'pif'] })
+  } else if (process.platform === 'darwin') {
+    filters.unshift({ name: '应用程序', extensions: ['app'] })
+  }
+  const r = await dialog.showOpenDialog(parent, {
+    properties: ['openFile'],
+    title: '选择要使用的应用程序',
+    filters,
+  })
+  if (r.canceled || !r.filePaths.length) return null
+  return r.filePaths[0].replace(/\\/g, '/')
+})
+
 ipcMain.handle('sys:memory', () => {
   const m = process.memoryUsage()
   return { rss: m.rss, heapUsed: m.heapUsed }

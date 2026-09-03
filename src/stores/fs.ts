@@ -15,6 +15,7 @@ import {
 import { idbAllRoots, idbPutRoot, idbDeleteRoot } from '../fs/idb'
 import { joinPath, parentOf, baseName, isValidName } from '../utils/path'
 import { categoryOf, LAUNCHABLE_CATEGORIES, isScriptEntry, type Category } from '../utils/categories'
+import { extOf } from '../utils/format'
 import { nativeLaunch } from '../fs/electron'
 import { useUi, type MenuItem } from './ui'
 import { useSettings } from './settings'
@@ -804,6 +805,28 @@ export const useFs = create<FsState>()((set, get) => {
         void launchEntry(entry)
         return
       }
+      // 普通文件按扩展名设置分流:system=系统默认 app=指定应用 internal=内置查看器
+      const target = useSettings.getState().getOpenWith(extOf(entry.name))
+      if (target.kind === 'system') {
+        if (s.provider?.openInSystem) {
+          s.provider
+            .openInSystem(entry.path)
+            .catch((e) => useUi.getState().toast(String(e.message || e), 'error'))
+        } else {
+          useUi.getState().toast('当前环境不支持用系统默认应用打开', 'error')
+        }
+        return
+      }
+      if (target.kind === 'app') {
+        if (s.provider?.openWithApp) {
+          s.provider
+            .openWithApp(entry.path, target.appPath)
+            .catch((e) => useUi.getState().toast(String(e.message || e), 'error'))
+        } else {
+          useUi.getState().toast('当前环境不支持指定应用打开', 'error')
+        }
+        return
+      }
       const category = entryCat
       const tabs = s.tabs.map((t) =>
         t.id === tab.id ? { ...t, view: { entry, category, dirty: false } } : t
@@ -1486,6 +1509,59 @@ async function launchEntry(entry: FileEntry, args?: string[]) {
   }
 }
 
+/** 构造单个文件的「打开方式」子菜单;会同时修改该扩展名的默认设置 */
+function buildOpenWithMenuItems(entry: FileEntry): MenuItem[] {
+  const s = useFs.getState()
+  if (s.provider?.kind !== 'native' || entry.kind !== 'file') return []
+  const st = useSettings.getState()
+  const ext = extOf(entry.name)
+  const target = st.getOpenWith(ext)
+  const check = (kind: string) => (target.kind === kind ? '✓ ' : '')
+  const provider = s.provider as ElectronProvider
+  const apply = async (t: import('./settings').OpenWithTarget) => {
+    try {
+      if (t.kind === 'internal') {
+        st.setOpenWith(ext, { kind: 'internal' })
+        s.openEntry(entry, { forceView: true })
+      } else if (t.kind === 'system') {
+        st.setOpenWith(ext, { kind: 'system' })
+        await provider.openInSystem!(entry.path)
+      } else if (t.kind === 'app') {
+        st.setOpenWith(ext, t)
+        await provider.openWithApp!(entry.path, t.appPath)
+      }
+    } catch (e) {
+      useUi.getState().toast(String((e as Error).message || e), 'error')
+    }
+  }
+  const pickOther = async () => {
+    try {
+      const appPath = await provider.pickOpenWithApp!()
+      if (!appPath) return
+      const appName = appPath.replace(/\\/g, '/').split('/').pop() || appPath
+      await apply({ kind: 'app', appPath, appName })
+    } catch (e) {
+      useUi.getState().toast(String((e as Error).message || e), 'error')
+    }
+  }
+  return [
+    {
+      label: '打开方式',
+      children: [
+        { label: `${check('internal')}内置查看器`, onClick: () => void apply({ kind: 'internal' }) },
+        { label: `${check('system')}系统默认应用`, onClick: () => void apply({ kind: 'system' }) },
+        { label: '其他应用...', onClick: () => void pickOther() },
+        { sep: true },
+        {
+          label: '重置为内置查看器',
+          disabled: target.kind === 'internal',
+          onClick: () => st.setOpenWith(ext, { kind: 'internal' }),
+        },
+      ],
+    },
+  ]
+}
+
 /** 供 FileList 的右键菜单使用:基于当前选择构造通用操作项 */
 export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
   const s = useFs.getState()
@@ -1535,13 +1611,7 @@ export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
       },
     })
     if (sel[0].kind === 'file') {
-      items.push({
-        label: '用系统默认程序打开',
-        onClick: () => {
-          const p = s.provider as unknown as { openInSystem(p: string): Promise<void> }
-          p.openInSystem(sel[0].path).catch((e) => useUi.getState().toast(String(e.message || e), 'error'))
-        },
-      })
+      items.push(...buildOpenWithMenuItems(sel[0]))
     }
     if (nativeExtras()) {
       items.push({ label: '在终端打开', onClick: openTerminalHere })

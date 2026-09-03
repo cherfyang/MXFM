@@ -51,6 +51,11 @@ export interface ExecPolicyDialog {
   type: 'execPolicy'
 }
 
+/** 按扩展名管理默认打开方式 */
+export interface OpenWithDialog {
+  type: 'openWith'
+}
+
 export type DialogState =
   | ConfirmDialog
   | PromptDialog
@@ -59,6 +64,7 @@ export type DialogState =
   | ShortcutsDialog
   | TrashDialog
   | ExecPolicyDialog
+  | OpenWithDialog
 
 export type MenuItem =
   | { sep: true }

@@ -8,6 +8,12 @@ export type ExecRunPolicy = 'alwaysAsk' | 'askUntrusted' | 'never'
 export type ExecAppBundleDoubleClick = 'viewer' | 'run'
 export type ExecScriptDefault = 'view' | 'run'
 
+/** 某种扩展名对应的默认打开目标 */
+export type OpenWithTarget =
+  | { kind: 'internal' }
+  | { kind: 'system' }
+  | { kind: 'app'; appPath: string; appName?: string }
+
 export interface ThemeMeta {
   id: ThemeId
   name: string
@@ -24,6 +30,13 @@ export const THEMES: ThemeMeta[] = [
 
 export function themeMeta(id: string): ThemeMeta {
   return THEMES.find((t) => t.id === id) ?? THEMES[0]
+}
+
+/** 统一扩展名 key:小写、保留前导点、无扩展名返回空串 */
+export function normalizeExt(ext: string): string {
+  const e = ext.trim().toLowerCase()
+  if (!e) return ''
+  return e.startsWith('.') ? e : '.' + e
 }
 
 interface SettingsState {
@@ -49,8 +62,14 @@ interface SettingsState {
   execShowBadges: boolean
   /** 透明图片背景棋盘格:true=显示 false=隐藏(默认隐藏)。文件列表缩略图与图片查看器共用 */
   showCheckerboard: boolean
+  /** 按扩展名设置默认打开方式:key=小写扩展名(含点,无扩展名用 '');未命中则默认用内置查看器 */
+  openWith: Record<string, OpenWithTarget>
   set<K extends keyof SettingsState>(key: K, value: SettingsState[K]): void
   toggle(key: 'viewMode' | 'foldersFirst' | 'showHidden' | 'singleClickOpen' | 'sidebarVisible' | 'previewVisible' | 'showCheckerboard'): void
+  /** 设置/取消某个扩展名的默认打开方式;target=null 表示删除(回退到内置) */
+  setOpenWith(ext: string, target: OpenWithTarget | null): void
+  /** 读取某个扩展名的默认打开方式(总是返回有效对象) */
+  getOpenWith(ext: string): OpenWithTarget
 }
 
 export const useSettings = create<SettingsState>()(
@@ -71,8 +90,19 @@ export const useSettings = create<SettingsState>()(
       execSafeModeSystemDirs: true,
       execShowBadges: true,
       showCheckerboard: false,
+      openWith: {},
       set: (key, value) => set({ [key]: value } as Partial<SettingsState>),
       toggle: (key) => set({ [key]: !get()[key] } as Partial<SettingsState>),
+      setOpenWith: (ext, target) => {
+        const key = normalizeExt(ext)
+        const next = { ...get().openWith }
+        if (!target || target.kind === 'internal') delete next[key]
+        else next[key] = target
+        set({ openWith: next })
+      },
+      getOpenWith: (ext) => {
+        return get().openWith[normalizeExt(ext)] ?? { kind: 'internal' }
+      },
     }),
     {
       name: 'mx-fm-settings',
@@ -90,6 +120,7 @@ export const useSettings = create<SettingsState>()(
           s.execSafeModeSystemDirs ??= true
           s.execShowBadges ??= true
           s.showCheckerboard ??= false
+          s.openWith ??= {}
         }
         return s as unknown as SettingsState
       },
