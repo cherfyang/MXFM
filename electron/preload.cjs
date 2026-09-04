@@ -22,7 +22,12 @@ contextBridge.exposeInMainWorld('mxAPI', {
   memory: () => ipcRenderer.invoke('sys:memory'),
   transcode: (p, kind) => ipcRenderer.invoke('transcode:start', p, kind),
   transcodeCancel: () => ipcRenderer.invoke('transcode:cancel'),
-  onMenuAction: (cb) => ipcRenderer.on('menu-action', (_e, action) => cb(action)),
+  onMenuAction: (cb) => {
+    const h = (_e, action) => cb(action)
+    ipcRenderer.on('menu-action', h)
+    // 返回退订函数(ipcRenderer.on 链式返回的是 ipcRenderer 本身,不是退订器)
+    return () => ipcRenderer.removeListener('menu-action', h)
+  },
 
   // ---- 批量流式复制/移动作业 ----
   // 用法:onOpProgress/onOpDone 挂监听(返回取消订阅函数)

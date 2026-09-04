@@ -159,3 +159,18 @@ function extFromEntryName(name: string): string {
   const dot = name.lastIndexOf('.')
   return dot > 0 ? name.slice(dot) : ''
 }
+
+// 跨窗口设置同步:persist 各窗口独立持快照、整包写回,多窗口会互相覆盖(如
+// A 窗口设置的打开方式被 B 窗口改主题时抹掉)。storage 事件只在「别的窗口」
+// 写入时触发,这里把最新状态合并进来。
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== 'mx-fm-settings' || !e.newValue) return
+    try {
+      const parsed = JSON.parse(e.newValue) as { state?: Partial<SettingsState> }
+      if (parsed.state) useSettings.setState(parsed.state)
+    } catch {
+      /* ignore */
+    }
+  })
+}

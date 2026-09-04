@@ -6,11 +6,13 @@ import { useFs } from '../stores/fs'
 
 export function DocxViewer({ entry }: ViewerProps) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const renderRunRef = useRef(0)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [errMsg, setErrMsg] = useState('')
 
   useEffect(() => {
     let alive = true
+    const runId = ++renderRunRef.current
     setStatus('loading')
     ;(async () => {
       try {
@@ -27,9 +29,14 @@ export function DocxViewer({ entry }: ViewerProps) {
           ignoreHeight: false,
           useBase64URL: true,
         })
+        // renderAsync 期间已切换到别的文件:清掉本次写入的旧内容,避免两份文档叠加
+        if (runId !== renderRunRef.current) {
+          hostRef.current.innerHTML = ''
+          return
+        }
         if (alive) setStatus('ready')
       } catch (e) {
-        if (alive) {
+        if (alive && runId === renderRunRef.current) {
           setStatus('error')
           setErrMsg(e instanceof Error ? e.message : String(e))
         }

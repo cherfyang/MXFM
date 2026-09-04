@@ -47,9 +47,9 @@ export default function App() {
 
   // 应用菜单动作(桌面版)
   useEffect(() => {
-    const api = (window as unknown as { mxAPI?: { onMenuAction(cb: (action: string) => void): void } }).mxAPI
+    const api = (window as unknown as { mxAPI?: { onMenuAction(cb: (action: string) => void): () => void } }).mxAPI
     if (!api?.onMenuAction) return
-    api.onMenuAction((action) => {
+    const off = api.onMenuAction((action) => {
       const s2 = useFs.getState()
       if (action === 'newFolder') s2.createEntry('folder')
       else if (action === 'newFile') s2.createEntry('file')
@@ -59,6 +59,7 @@ export default function App() {
       } else if (action === 'nextTab') s2.nextTab(1)
       else if (action === 'prevTab') s2.nextTab(-1)
     })
+    return off
   }, [])
 
   // 有未保存修改时关闭页面前提示

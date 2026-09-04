@@ -26,7 +26,31 @@ function windowStateFile(seq) {
 
 function loadWindowState(seq) {
   try {
-    return JSON.parse(fs.readFileSync(windowStateFile(seq), 'utf8'))
+    const s = JSON.parse(fs.readFileSync(windowStateFile(seq), 'utf8'))
+    if (typeof s !== 'object' || s === null) return null
+    // 类型/范围校验:残缺但恰好合法的 JSON(如 x:"abc")会让 BrowserWindow 抛错导致全程无窗口
+    for (const k of ['x', 'y', 'width', 'height']) {
+      if (!Number.isFinite(s[k])) delete s[k]
+    }
+    if (s.width != null && (s.width < 200 || s.width > 20000)) delete s.width
+    if (s.height != null && (s.height < 150 || s.height > 20000)) delete s.height
+    // 恢复的位置必须落在现存显示器的可见区域(外接显示器被拔掉后不再指回屏外)
+    if (Number.isFinite(s.x) && Number.isFinite(s.y)) {
+      try {
+        const { screen } = require('electron')
+        const visible = screen.getAllDisplays().some((d) => {
+          const a = d.workArea
+          return s.x >= a.x - 100 && s.x < a.x + a.width && s.y >= a.y - 30 && s.y < a.y + a.height
+        })
+        if (!visible) {
+          delete s.x
+          delete s.y
+        }
+      } catch {
+        /* screen 不可用时保持原值 */
+      }
+    }
+    return s
   } catch {
     return null
   }
@@ -388,10 +412,16 @@ ipcMain.handle('fs:stat', async (_e, p) => {
 })
 
 ipcMain.handle('fs:read', async (_e, p, start = 0, length) => {
+  // start/length 来自渲染层:类型与上限校验,防止超大 Buffer.alloc 拖垮主进程
+  if (!Number.isSafeInteger(start) || start < 0) throw new Error('非法的读取起点')
+  if (length != null && (!Number.isSafeInteger(length) || length <= 0 || length > 64 * 1024 * 1024)) {
+    throw new Error('非法的读取长度(单次上限 64MB)')
+  }
   const fh = await fsp.open(checkPath(p, false), 'r')
   try {
     const total = (await fh.stat()).size
-    const len = length == null ? Math.max(total - start, 0) : length
+    const remain = Math.max(total - start, 0)
+    const len = Math.min(length == null ? remain : length, remain)
     const buf = Buffer.alloc(len)
     const { bytesRead } = await fh.read(buf, 0, len, start)
     return buf.subarray(0, bytesRead)
@@ -723,7 +753,7 @@ async function runOp(sender, id, payload) {
 ipcMain.handle('fs:op:start', async (event, payload) => {
   if (activeOpId) throw new Error('busy: 已有文件操作正在进行')
   const id = 'op-' + Date.now().toString(36) + '-' + (++opSeq).toString(36)
-  const op = { aborted: false, current: null }
+  const op = { aborted: false, current: null, sender: event.sender }
   ops.set(id, op)
   activeOpId = id
   const sender = event.sender
@@ -744,10 +774,12 @@ ipcMain.handle('fs:op:start', async (event, payload) => {
 })
 
 /** 取消:置 aborted、destroy 当前流、删除半成品目标文件 */
-ipcMain.on('fs:op:cancel', (_e, payload) => {
+ipcMain.on('fs:op:cancel', (e, payload) => {
   const id = payload && payload.id
   const op = id ? ops.get(id) : null
   if (!op) return
+  // 只允许发起作业的窗口取消,防跨窗口误伤
+  if (op.sender && op.sender !== e.sender.id) return
   op.aborted = true
   const cur = op.current
   if (cur) {
@@ -1047,7 +1079,10 @@ ipcMain.handle('fs:watch:start', (event, dir) => {
   return id
 })
 
-ipcMain.handle('fs:watch:stop', (_e, id) => {
+ipcMain.handle('fs:watch:stop', (e, id) => {
+  // 只允许创建者停掉自己的监听,防跨窗口误伤
+  const w = watchers.get(Number(id))
+  if (w && w.sender !== e.sender) return
   destroyWatch(Number(id))
 })
 
@@ -2271,8 +2306,9 @@ const psStr = (s) => "'" + String(s).replace(/'/g, "''") + "'"
 function runPowerShell(script, timeoutMs = TRASH_PS_TIMEOUT) {
   return new Promise((resolve, reject) => {
     const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true })
-    let out = ''
-    let err = ''
+    // 收集字节块最后一次性解码:逐块 toString 会把跨块的多字节 UTF-8(中文)切坏成乱码
+    const out = []
+    const err = []
     const timer = setTimeout(() => {
       try {
         p.kill()
@@ -2282,15 +2318,16 @@ function runPowerShell(script, timeoutMs = TRASH_PS_TIMEOUT) {
       reject(new Error('PowerShell 执行超时'))
     }, timeoutMs)
     p.stdout.on('data', (d) => {
-      out += d
+      out.push(d)
     })
     p.stderr.on('data', (d) => {
-      err += d
+      err.push(d)
     })
     p.on('close', (code) => {
       clearTimeout(timer)
-      if (code === 0) resolve(out)
-      else reject(new Error((err || '').trim() || `PowerShell 退出码 ${code}`))
+      const so = Buffer.concat(out).toString('utf8')
+      if (code === 0) resolve(so)
+      else reject(new Error((Buffer.concat(err).toString('utf8') || '').trim() || `PowerShell 退出码 ${code}`))
     })
     p.on('error', (e) => {
       clearTimeout(timer)
@@ -2744,6 +2781,7 @@ const indexState = {
   orderJob: null, // 在算的排序 Promise(串行化,避免两个大排序并发)
   building: false,
   parsing: false, // 持久化文件解析中:entries 含未拆分的原始行,查询/搜索一律返回空
+  rebuildQueued: false, // 解析/构建期间收到过重建请求,结束后自动接续
   truncated: false, // 构建触及上限被截断
   counts: null, // { image, video, audio, document, zip, ebook } 每分类计数;v2 数据就绪后才有
   groupSizes: null, // 每分类容量合计(字节);v2 数据就绪后才有
@@ -2889,9 +2927,15 @@ async function loadIndexFile() {
     /* ignore */
   }
   if (legacy) {
-    void rebuildLower(n) // 旧格式也补 lower;填充完成前由搜索侧逐条兜底
+    // legacy 的 name 排序依赖 lower 完整:半填充期算出的乱序会被缓存,必须等它结束
+    await rebuildLower(n)
     indexState.parsing = false
     // 旧格式无 cats,counts 保持 null(渲染层回退扫描计数),启动 4s 后会自动重建
+    broadcastIndex(indexStatusPayload())
+    if (indexState.rebuildQueued) {
+      indexState.rebuildQueued = false
+      setTimeout(startGlobalIndexBuild, 200)
+    }
     return { loaded: true, legacy: true }
   }
   // v2:逐行解析 path\tsize\tmtime,分块让出事件循环避免启动卡顿
@@ -2920,6 +2964,10 @@ async function loadIndexFile() {
   indexState.parsing = false
   // 加载完成广播一次最终状态:渲染层启动早期的 indexStatus 拉取拿到的是 counts=null
   broadcastIndex(indexStatusPayload())
+  if (indexState.rebuildQueued && !indexState.building) {
+    indexState.rebuildQueued = false
+    setTimeout(startGlobalIndexBuild, 200)
+  }
   return { loaded: ok, legacy: false }
 }
 
@@ -3185,7 +3233,12 @@ async function indexSearch(opts) {
 ipcMain.handle('index:status', () => indexStatusPayload())
 
 ipcMain.handle('index:rebuild', () => {
-  if (!indexState.building) startGlobalIndexBuild()
+  // 解析中启动重建会与 loadIndexFile 的收尾写入并发,混写索引数据:排队到解析完成后
+  if (indexState.parsing || indexState.building) {
+    rebuildQueued = true
+    return true
+  }
+  startGlobalIndexBuild()
   return true
 })
 
@@ -3676,8 +3729,23 @@ ipcMain.handle('exec:uninstall', async (event, opts) => {
   const cwd = loc && fs.existsSync(loc) ? loc : path.dirname(exe)
   uninstallCache = null // 卸载已触发,列表缓存立即失效
 
-  // 发射后不管:卸载程序通常自己弹 UAC,我们不提权也不等它结束
-  const r = await spawnExec(exe, argv.slice(1), { cwd })
+  // 发射后不管:卸载程序通常自己弹 UAC,我们不提权也不等它结束。
+  // Node(CVE-2024-27980 修复后)禁止无 shell 直接 spawn .bat/.cmd:这类卸载器经 cmd 中转,
+  // 参数先过 cmd 元字符过滤(与 spawnWinBatch 同规则)
+  let spawnFile = exe
+  let spawnArgs = argv.slice(1)
+  let verbatim = false
+  if (/\.(bat|cmd)$/i.test(exe)) {
+    try {
+      spawnArgs = sanitizeBatchArgs(spawnArgs)
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+    spawnFile = process.env.ComSpec || 'cmd.exe'
+    spawnArgs = ['/d', '/s', '/c', `"${exe}"`, ...spawnArgs]
+    verbatim = true
+  }
+  const r = await spawnExec(spawnFile, spawnArgs, { cwd, windowsVerbatimArguments: verbatim })
   if (!r.ok) return { ok: false, error: mapExecError(r.error) }
   // 审计只记程序 id 与参数个数,不记命令内容
   appendExecLog({

@@ -6,6 +6,7 @@ import { IconBtn } from '../components/ui'
 
 export function PdfViewer({ entry }: ViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const renderTaskRef = useRef<any>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const docRef = useRef<any>(null)
   const [numPages, setNumPages] = useState(0)
@@ -51,26 +52,35 @@ export function PdfViewer({ entry }: ViewerProps) {
     }
   }, [entry.path])
 
-  // 渲染当前页
+  // 渲染当前页。快速翻页/缩放时:过期的 getPage 结果用 cancelled 丢弃;
+  // 新渲染开始前取消上一个 render task,否则同一 canvas 双 render 会抛错被吞、静默显示错页
   useEffect(() => {
     if (status !== 'ready') return
-    let task: any = null
+    let cancelled = false
     ;(async () => {
       const doc = docRef.current
       const canvas = canvasRef.current
-      if (!doc || !canvas) return
+      if (!doc || !canvas || cancelled) return
       const p = await doc.getPage(page)
+      if (cancelled) return
       const viewport = p.getViewport({ scale })
       canvas.width = Math.floor(viewport.width * devicePixelRatio)
       canvas.height = Math.floor(viewport.height * devicePixelRatio)
       canvas.style.width = `${Math.floor(viewport.width)}px`
       canvas.style.height = `${Math.floor(viewport.height)}px`
-      task = p.render({ canvasContext: canvas.getContext('2d')!, viewport, transform: devicePixelRatio > 1 ? [devicePixelRatio, 0, 0, devicePixelRatio, 0, 0] : undefined })
+      try {
+        renderTaskRef.current?.cancel()
+      } catch {
+        /* ignore */
+      }
+      const task = p.render({ canvasContext: canvas.getContext('2d')!, viewport, transform: devicePixelRatio > 1 ? [devicePixelRatio, 0, 0, devicePixelRatio, 0, 0] : undefined })
+      renderTaskRef.current = task
       await task.promise
     })().catch(() => {})
     return () => {
+      cancelled = true
       try {
-        task?.cancel()
+        renderTaskRef.current?.cancel()
       } catch {
         /* ignore */
       }

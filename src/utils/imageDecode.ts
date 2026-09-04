@@ -59,17 +59,27 @@ function decodeInWorker(
     const w = getDecodeWorker()
     if (!w) return reject(new Error('__no_worker__'))
     const id = ++decodeWorkerSeq
-    const timer = setTimeout(() => {
-      w.removeEventListener('message', onMsg)
-      reject(new Error(`解码超时(${DECODE_TIMEOUT / 1000}s),文件可能过大或已损坏`))
-    }, DECODE_TIMEOUT)
     const onMsg = (e: MessageEvent) => {
       if (e.data?.id !== id) return
       clearTimeout(timer)
       w.removeEventListener('message', onMsg)
       if (e.data.ok) resolve({ rgba: e.data.rgba, width: e.data.width, height: e.data.height })
-      else reject(new Error(e.data.error))
+      else reject(new Error(e.data.error || '解码失败'))
     }
+    // worker 崩溃/超时都必须置空重建:否则死 worker 会让后续所有解码各白等满 30s
+    const die = (msg: string) => {
+      clearTimeout(timer)
+      w.removeEventListener('message', onMsg)
+      try {
+        w.terminate()
+      } catch {
+        /* ignore */
+      }
+      if (decodeWorker === w) decodeWorker = null
+      reject(new Error(msg))
+    }
+    const timer = setTimeout(() => die(`解码超时(${DECODE_TIMEOUT / 1000}s),文件可能过大或已损坏`), DECODE_TIMEOUT)
+    w.onerror = () => die('解码 worker 已崩溃')
     w.addEventListener('message', onMsg)
     w.postMessage({ id, kind, buf }, [buf])
   })

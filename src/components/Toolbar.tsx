@@ -37,7 +37,7 @@ import { segments } from '../utils/path'
 import { fmtBytes } from '../utils/format'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { HOME_PATH } from '../stores/scan'
-import { getDragPayload } from './dnd'
+import { getDragPayload, setDragPayload } from './dnd'
 import { IconBtn } from './ui'
 
 export function Toolbar() {
@@ -442,6 +442,7 @@ function Breadcrumb({ path }: { path: string }) {
       onDrop={(e) => {
         setDropping(false)
         const payload = getDragPayload()
+        setDragPayload(null) // 清残留:否则下一次外部拖入会被误判成内部拖拽而吞掉
         if (!payload) return
         e.preventDefault()
         e.stopPropagation()
@@ -466,6 +467,7 @@ function Breadcrumb({ path }: { path: string }) {
                 e.preventDefault()
                 e.stopPropagation()
                 const payload = getDragPayload()
+                setDragPayload(null) // 清残留,理由同上
                 if (!payload) return
                 const entries = (s.listings[s.activeId]?.entries ?? []).filter((en) => payload.includes(en.path))
                 void s.moveEntries(entries, target)
