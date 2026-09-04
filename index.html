@@ -15,12 +15,12 @@
       - connect-src 的 ws: / wss: 是 Vite HMR 的 WebSocket 通道(dev 下连 ws://localhost:5188);
         mxfile: / blob: / data: 供 fetch/XHR 读取本地文件与转码产物。
       - worker-src 'self' blob::pdfjs-dist 以 blob worker 形式加载,pdf 预览依赖它。
-      - 未加 object-src / frame-src:本项目不使用 <object>/<embed>/<iframe>,
-        由 default-src 'self' 兜底。
+      - frame-src 'self' blob::EPUB 阅读器(epub.js)运行时会创建 <iframe> 渲染章节
+        (章节以 blob: URL 加载);object-src 'none':本项目不使用 <object>/<embed>。
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' mxfile: blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' mxfile: blob: data:; media-src 'self' mxfile: blob:; font-src 'self' data:; connect-src 'self' ws: wss: mxfile: blob: data:; worker-src 'self' blob:;"
+      content="default-src 'self' mxfile: blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' mxfile: blob: data:; media-src 'self' mxfile: blob:; font-src 'self' data:; connect-src 'self' ws: wss: mxfile: blob: data:; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none';"
     />
     <title>MX 文件管理器</title>
   </head>

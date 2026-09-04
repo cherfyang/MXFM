@@ -224,6 +224,14 @@ const SHORTCUT_GROUPS: { title: string; rows: [string, string][] }[] = [
 ]
 
 function ShortcutsDialog() {
+  // 与其他对话框一致:Esc 可关闭
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') useUi.getState().closeDialog()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   return (
     <div
       className="fixed inset-0 z-40 flex items-center justify-center bg-black/45"

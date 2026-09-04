@@ -18,6 +18,8 @@ import { themeMeta } from './stores/settings'
 import { HomePage } from './components/HomePage'
 import { HOME_PATH } from './stores/scan'
 
+const IS_MAC = /Mac/i.test(navigator.platform)
+
 export default function App() {
   const s = useFs()
   const st = useSettings()
@@ -134,7 +136,7 @@ export default function App() {
       const mod = e.ctrlKey || e.metaKey
 
       if (!tab) {
-        if (e.altKey && e.key.toLowerCase() === 't') {
+        if (e.altKey && e.code === 'KeyT') {
           e.preventDefault()
           s.newTab()
         }
@@ -282,7 +284,7 @@ export default function App() {
         s.goForward()
         return
       }
-      if (e.altKey && e.key.toLowerCase() === 't') {
+      if (e.altKey && e.code === 'KeyT') {
         e.preventDefault()
         s.newTab()
         return
@@ -329,6 +331,14 @@ export default function App() {
           break
         case 'Backspace':
           if (mod && e.altKey) {
+            if (!tab.view && sel.length) {
+              e.preventDefault()
+              s.permanentDeleteSelection()
+            }
+            break
+          }
+          // mac ⌘⌫ 彻底删除(README/速查表声称的键位;mac 无剪切冲突,不会误占 Win 的 ⌘⌥⌫)
+          if (IS_MAC && e.metaKey && !e.altKey) {
             if (!tab.view && sel.length) {
               e.preventDefault()
               s.permanentDeleteSelection()

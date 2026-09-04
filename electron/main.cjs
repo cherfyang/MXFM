@@ -195,11 +195,17 @@ function buildMenu() {
 // ---------- 系统信息 ----------
 async function probeDrives() {
   const drives = []
+  // 映射的网络盘在共享不可达时 fsp.access 可能阻塞数秒:超时视为不存在
+  const accessWithTimeout = async (p) => {
+    return Promise.race([
+      fsp.access(p).then(() => true),
+      new Promise((r) => setTimeout(() => r(false), 1500)),
+    ])
+  }
   await Promise.all(
     'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(async (L) => {
       try {
-        await fsp.access(L + ':/')
-        drives.push(L + ':')
+        if (await accessWithTimeout(L + ':/')) drives.push(L + ':')
       } catch {
         /* 盘符不存在 */
       }
@@ -260,19 +266,20 @@ ipcMain.handle('sys:boot', async () => ({
 const CASE_SENSITIVE_FS = process.platform === 'linux'
 const pathKey = (p) => (CASE_SENSITIVE_FS ? p : p.toLowerCase())
 
-/** target 是否位于 root 之内(含等于 root) */
+/** target 是否位于 root 之内(含等于 root)。
+ *  大小写不敏感 FS(win/mac)必须先按忽略大小写判定再走词法比较:
+ *  '/system/x' 相对 '/System' 的 relative 是 '../system/x',词法检查会漏判 */
 function isUnder(target, root) {
-  const rel = path.relative(root, target)
-  if (!rel) return true
-  if (rel.startsWith('..') || path.isAbsolute(rel)) return false
-  // 大小写不敏感文件系统(Windows 默认、macOS 默认)上,大小写不同的词法路径指向同一目录:
-  // '/system/x' 必须按命中保护目录 '/System' 处理(linux 区分大小写,不做此放宽)
   if (process.platform !== 'linux') {
     const t = target.toLowerCase().replace(/[\\/]+$/, '')
     const r = root.toLowerCase().replace(/[\\/]+$/, '')
-    if (t === r || t.startsWith(r + '/') || t.startsWith(r + '\\')) return true
+    if (t === r) return true
+    if (t.startsWith(r + '/') || t.startsWith(r + '\\')) return true
+    return false
   }
-  return true
+  const rel = path.relative(root, target)
+  if (!rel) return true
+  return !(rel.startsWith('..') || path.isAbsolute(rel))
 }
 
 let sensitiveCache = null
@@ -318,10 +325,12 @@ function checkPath(p, write) {
   if (/^\\\\\?\\/i.test(p)) p = p.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/i, '')
   const rp = path.resolve(p)
   // Win32 会剥掉段尾的点/空格:'C:/x../y' 词法上不在 'C:/Windows' 下,实际命中的却是它;
-  // 保留设备名(CON/NUL/COM1…)同理。凡出现一律拒绝。
-  for (const seg of rp.split(/[\\/]+/)) {
-    if (!seg) continue
-    if (/[. ]$/.test(seg) || WIN_RESERVED_NAME.test(seg)) throw new Error(`路径包含非法段:${seg}`)
+  // 保留设备名(CON/NUL/COM1…)同理。仅 Windows 启用:Linux/mac 上这些是合法文件名。
+  if (process.platform === 'win32') {
+    for (const seg of rp.split(/[\\/]+/)) {
+      if (!seg) continue
+      if (/[. ]$/.test(seg) || WIN_RESERVED_NAME.test(seg)) throw new Error(`路径包含非法段:${seg}`)
+    }
   }
   if (isSensitive(rp)) {
     if (write) throw new Error(`拒绝修改受保护的系统位置:${rp}`)
@@ -941,11 +950,13 @@ function runFfmpeg(args) {
 const BROWSER_VIDEO_CODECS = new Set(['h264', 'vp8', 'vp9', 'av1'])
 
 /** 探测媒体流:ffmpeg 不给输出文件时会把流信息打到 stderr 后以 1 退出 */
-function probeMedia(srcPath) {
+/** 探测媒体流:ffmpeg 不给输出文件时会把流信息打到 stderr 后以 1 退出。
+ *  expectedSeq = 调用方请求的代数;探测期间 transcode:cancel 会让代数失效 → cancelled:true。
+ *  不能在这里再自增 transSeq,否则调用方的 mySeq 恒不等于新代数,一切视频转码都会被误判为已取消 */
+function probeMedia(srcPath, expectedSeq) {
   return new Promise((resolve) => {
     const ff = ffmpegPath()
     if (!ff) return resolve({ video: '', audio: false })
-    const mySeq = ++transSeq
     const p = spawn(ff, ['-hide_banner', '-nostats', '-i', srcPath], { windowsHide: true })
     transProc = p
     let err = ''
@@ -953,8 +964,7 @@ function probeMedia(srcPath) {
       err += d
     })
     p.on('close', () => {
-      // 探测期间被取消:返回 cancelled 标记,调用方不再落入慢速转码
-      if (mySeq !== transSeq) return resolve({ video: '', audio: false, cancelled: true })
+      if (expectedSeq !== transSeq) return resolve({ video: '', audio: false, cancelled: true })
       const vm = /Video: ([a-zA-Z0-9_]+)/.exec(err)
       resolve({ video: vm ? vm[1].toLowerCase() : '', audio: /Audio: /.test(err) })
     })
@@ -992,7 +1002,7 @@ ipcMain.handle('transcode:start', async (_e, rawSrc, kind) => {
     // 重封装不改编码:源编码浏览器不支持(如 mpeg4/WMV3)时产物照样放不了,
     // 会陷入「重封装 → 播放失败 → 再转码」循环,所以必须先探测源编码。
     if (kind === 'video') {
-      const probe = await probeMedia(srcPath)
+      const probe = await probeMedia(srcPath, mySeq)
       if (probe.cancelled || cancelled()) {
         await fsp.rm(outPath, { force: true }).catch(() => {})
         return { ok: false, msg: '已取消' }
@@ -2885,12 +2895,28 @@ function saveIndexFile() {
   try {
     const tmp = indexFilePath() + '.tmp'
     const ws = fs.createWriteStream(tmp, 'utf8')
+    // 写盘失败(磁盘满/杀软锁文件)是异步 error 事件,不监听会以未捕获异常崩掉主进程
+    ws.on('error', () => {
+      try {
+        ws.destroy()
+      } catch {
+        /* ignore */
+      }
+    })
     const { entries, sizes, mtimes } = indexState
     for (let i = 0; i < entries.length; i++) {
       ws.write(entries[i] + '\t' + Math.round(sizes[i]) + '\t' + Math.round(mtimes[i]) + '\n')
     }
     ws.end(() => {
-      fs.rename(tmp, indexFilePath(), () => {})
+      fs.rename(tmp, indexFilePath(), (err) => {
+        if (err) {
+          try {
+            fs.unlinkSync(tmp)
+          } catch {
+            /* ignore */
+          }
+        }
+      })
     })
   } catch {
     /* 索引写盘失败不影响使用,下次启动重建 */
@@ -3084,6 +3110,11 @@ async function buildGlobalIndex() {
   } finally {
     indexState.building = false
     broadcastIndex(indexStatusPayload())
+    // 构建期间收到过重建请求:完成后自动接续一轮
+    if (indexState.rebuildQueued && !indexState.aborted) {
+      indexState.rebuildQueued = false
+      setTimeout(startGlobalIndexBuild, 200)
+    }
   }
 }
 
@@ -3260,7 +3291,7 @@ ipcMain.handle('index:status', () => indexStatusPayload())
 ipcMain.handle('index:rebuild', () => {
   // 解析中启动重建会与 loadIndexFile 的收尾写入并发,混写索引数据:排队到解析完成后
   if (indexState.parsing || indexState.building) {
-    rebuildQueued = true
+    indexState.rebuildQueued = true
     return true
   }
   startGlobalIndexBuild()
@@ -3813,7 +3844,47 @@ function registerMxfileProtocol() {
       console.warn('[mx-fm] mxfile:// 拒绝未授权路径:', rp)
       return new Response('forbidden', { status: 403 })
     }
-    // net.fetch 原生支持 Range 请求 → <video> 拖动进度条可用
+    // net.fetch 不会透传原始请求的 Range 头(electron#38749),视频 seek 会退化成全量重读;
+    // 这里手动实现 206 分段响应,大文件的拖动进度条才是真正的秒级 seek
+    let stat
+    try {
+      stat = fs.statSync(rp)
+    } catch {
+      return new Response('not found', { status: 404 })
+    }
+    const rangeHeader = request.headers.get('range')
+    if (rangeHeader) {
+      const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim())
+      if (m && (m[1] !== '' || m[2] !== '')) {
+        let start = m[1] === '' ? null : parseInt(m[1], 10)
+        let end = m[2] === '' ? null : parseInt(m[2], 10)
+        if (start === null) {
+          // bytes=-N:最后 N 字节
+          start = Math.max(0, stat.size - (end ?? 0))
+          end = stat.size - 1
+        } else if (end === null || end >= stat.size) {
+          end = stat.size - 1
+        }
+        if (start > end || start >= stat.size) {
+          return new Response('range not satisfiable', {
+            status: 416,
+            headers: { 'Content-Range': `bytes */${stat.size}` },
+          })
+        }
+        return new Response(fs.createReadStream(rp, { start, end }), {
+          status: 206,
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': String(end - start + 1),
+            'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+            'Accept-Ranges': 'bytes',
+          },
+        })
+      }
+    }
+    if (request.method === 'HEAD') {
+      return new Response(null, { headers: { 'Content-Length': String(stat.size), 'Accept-Ranges': 'bytes' } })
+    }
     return net.fetch(pathToFileURL(rp).href)
   })
 }

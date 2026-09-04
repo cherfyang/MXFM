@@ -174,6 +174,8 @@ const nextTabId = () => `t${tabSeq++}`
 
 /** 当前进行中操作的取消控制器(不入 state:不需要触发渲染) */
 let opAbort: AbortController | null = null
+/** 防双击双启动:记录最近一次用外部程序打开的文件(path + 时间) */
+let lastExternalOpen = { path: '', at: 0 }
 /** 操作序号:并发收尾时只有最后一个作业有权清掉状态栏进度 */
 let opSeq = 0
 
@@ -812,6 +814,10 @@ export const useFs = create<FsState>()((set, get) => {
         ? ({ kind: 'internal' } as import('./settings').OpenWithTarget)
         : useSettings.getState().getOpenWithForEntry(entry)
       if (target.kind === 'system') {
+        // 防双击双启动:双击 = 两次 click,同一文件 600ms 内只触发一次外部打开
+        const now = Date.now()
+        if (lastExternalOpen.path === entry.path && now - lastExternalOpen.at < 600) return
+        lastExternalOpen = { path: entry.path, at: now }
         if (s.provider?.openInSystem) {
           s.provider
             .openInSystem(entry.path)
@@ -822,6 +828,9 @@ export const useFs = create<FsState>()((set, get) => {
         return
       }
       if (target.kind === 'app') {
+        const now = Date.now()
+        if (lastExternalOpen.path === entry.path && now - lastExternalOpen.at < 600) return
+        lastExternalOpen = { path: entry.path, at: now }
         if (s.provider?.openWithApp) {
           s.provider
             .openWithApp(entry.path, target.appPath)
@@ -1109,6 +1118,16 @@ export const useFs = create<FsState>()((set, get) => {
       }
       {
         if (opSeq === token) get().setOp(null)
+        // 从选中集中移除已删除路径:幽灵路径会让状态栏计数错误、Delete 静默无效
+        const del = new Set(paths)
+        const tabId = s.activeId
+        const sel = get().selection[tabId]
+        if (sel?.length) {
+          const next = sel.filter((x) => !del.has(x))
+          if (next.length !== sel.length) set({ selection: { ...get().selection, [tabId]: next } })
+        }
+        const anchor = get().anchor[tabId]
+        if (anchor && del.has(anchor)) set({ anchor: { ...get().anchor, [tabId]: undefined } })
         // 正在查看被删除的文件则关闭查看器
         const tab = activeTab()
         if (tab?.view && paths.includes(tab.view.entry.path)) get().closeView()

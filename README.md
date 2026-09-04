@@ -13,9 +13,9 @@
 | 文件 | 平台 |
 | --- | --- |
 | `MXFileManager-Setup-x.x.x.exe` | Windows(一键安装,自动创建桌面快捷方式) |
-| `MXFileManager-x.x.x.dmg` | macOS |
+| `MXFileManager-x.x.x-arm64.dmg` | macOS(Apple Silicon) |
 
-每次推送 `v*` 标签(或在 [Actions](https://github.com/cherfyang/MXFM/actions/workflows/release.yml) 手动运行)都会自动构建两个平台的安装包并发布。
+每次推送 `v*` 标签会自动构建双平台安装包并发布(在 [Actions](https://github.com/cherfyang/MXFM/actions/workflows/release.yml) 手动运行仅构建产物,不发布)。
 
 > 安装包未做代码签名:
 >

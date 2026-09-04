@@ -101,6 +101,10 @@ export function FileList() {
   }, [])
 
   function rowProps(entry: FileEntry, index: number) {
+    // 可执行/安装包类:单击只选中不打开(防误触运行),但双击仍可打开
+    const launchable =
+      LAUNCHABLE_CATEGORIES.has(categoryOf(entry)) ||
+      (isScriptEntry(entry) && useSettings.getState().execScriptDefault === 'run')
     return {
       entry,
       selected: selSet.has(entry.path),
@@ -117,9 +121,6 @@ export function FileList() {
           return
         }
         // 可执行/安装包类:单击只选中不打开(singleClickOpen 豁免,防误触运行)
-        const launchable =
-          LAUNCHABLE_CATEGORIES.has(categoryOf(entry)) ||
-          (isScriptEntry(entry) && useSettings.getState().execScriptDefault === 'run')
         if (entry.kind === 'file' && st.singleClickOpen && !launchable) {
           s.clickSelect(entry, index, entries, e)
           s.openEntry(entry)
@@ -134,8 +135,12 @@ export function FileList() {
       onTouchMove: lpMove,
       onTouchEnd: lpClear,
       onDoubleClick: () => {
-        if (entry.kind === 'directory') s.openEntry(entry)
-        else if (!st.singleClickOpen) s.openEntry(entry)
+        if (entry.kind === 'directory') {
+          s.openEntry(entry)
+          return
+        }
+        // singleClickOpen 时单击已打开过;可执行类单击被豁免,双击仍可打开(否则鼠标完全无法打开)
+        if (!st.singleClickOpen || launchable) s.openEntry(entry)
       },
       onContext: (e: React.MouseEvent) => {
         e.preventDefault()
@@ -154,7 +159,11 @@ export function FileList() {
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData('text/plain', entry.name)
       },
-      onDragEndRow: () => setDragPayload(null),
+      onDragEndRow: () => {
+        setDragPayload(null)
+        // dragend 总在源元素上触发:拖出窗口/按 Esc 取消时也要清掉常驻高亮
+        setDropping(false)
+      },
       canDropOn: () => {
         const payload = getDragPayload()
         if (!payload || entry.kind !== 'directory') return false
@@ -200,7 +209,8 @@ export function FileList() {
       setDropping(hasInternal || hasExternal)
     },
     onDragLeave: (e: React.DragEvent) => {
-      if (e.target === scrollRef.current) setDropping(false)
+      // 行铺满容器时 dragleave 的 target 通常是行而非容器本身:用 relatedTarget 判断是否真拖出
+      if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropping(false)
     },
     onDrop: async (e: React.DragEvent) => {
       const payload = getDragPayload()
