@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Loader2, Play, X } from 'lucide-react'
 import type { FileEntry } from '../fs/types'
+import { mediaFileUrl } from '../fs/electron'
 
 /** 桌面版才有转码能力 */
 export function transcodeAvailable(): boolean {
@@ -40,14 +41,18 @@ export function TranscodeOverlay({ entry, kind, auto, onReady }: Props) {
     }
     const nativePath = provider?.toNativePath?.(entry.path)
     if (!nativePath) {
+      started.current = false
       setPhase('error')
       setMsg('无法定位本地文件')
       return
     }
     const r = await api.transcode(nativePath, kind)
     if (r.ok && r.outPath) {
-      onReady('mxfile://localhost/' + encodeURIComponent(r.outPath))
+      // 产物路径是本机绝对路径:反斜杠归一为 / 后走与播放器相同的 mxfile 编码,
+      // 否则 encodeURIComponent 会把 C:\ 编码成 %5C,协议侧白名单必然 403
+      onReady(mediaFileUrl(r.outPath.replace(/\\/g, '/')))
     } else {
+      started.current = false // 允许「重试」真正重新发起
       setPhase('error')
       setMsg(r.msg || '转码失败')
     }

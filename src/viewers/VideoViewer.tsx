@@ -372,6 +372,7 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
           onReady={(u) => {
             setOverrideUrl(u)
             setForcedTranscode(false)
+            setErr(false) // 转码产物可播时必须清掉错误遮罩,否则盖住视频且按钮死循环
           }}
         />
       </div>

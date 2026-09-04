@@ -168,7 +168,8 @@ export function ViewerHost({
       total: siblings.length,
       onNav: (delta: number) => {
         const next = siblings[(index + delta + siblings.length) % siblings.length]
-        s.openEntry(next)
+        // forceView:跳过「用系统应用打开」分流,切换后仍留在内置查看器
+        s.openEntry(next, { forceView: true })
       },
     }
   }, [entry.path, cat, embedded, s.tabs, s.listings, s.activeId])

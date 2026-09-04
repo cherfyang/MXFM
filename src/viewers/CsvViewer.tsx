@@ -169,7 +169,10 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
   }, [readOnly, matrix, truncated])
 
   const rowCount = matrix?.length ?? 0
-  const colCount = Math.min(Math.max(...(matrix ?? [[]]).map((r) => r.length), 1), COL_CAP)
+  // 大文件可达数十万行:不能用 Math.max(...rows.map()) 展开(参数超限直接 RangeError)
+  let maxCols = 1
+  if (matrix) for (const r of matrix) if (r.length > maxCols) maxCols = r.length
+  const colCount = Math.min(maxCols, COL_CAP)
 
   const virt = useVirtualizer({
     count: rowCount,

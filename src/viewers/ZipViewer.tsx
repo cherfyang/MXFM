@@ -291,9 +291,16 @@ export function ZipViewer({ entry }: ViewerProps) {
     const destDir = `${dir}/${destName}`
     try {
       await s.provider!.mkdir(destDir)
+      // Zip-Slip 防护:压缩包条目名可能含「..」段或盘符/绝对路径,写出解压目录之外
+      const isSafe = (p: string) => {
+        if (p.startsWith('/') || /^[a-zA-Z]:/.test(p)) return false
+        return !p.split(/[\\/]/).includes('..')
+      }
       const fileItems = items.filter((i) => !i.isDir)
+      const unsafe = fileItems.filter((i) => !isSafe(i.path))
+      const safeItems = fileItems.filter((i) => isSafe(i.path))
       const dirs = new Set<string>()
-      for (const item of fileItems) {
+      for (const item of safeItems) {
         const segs = item.path.split('/').slice(0, -1)
         let cur = destDir
         for (const seg of segs) {
@@ -305,11 +312,18 @@ export function ZipViewer({ entry }: ViewerProps) {
         await s.provider!.mkdir(d)
       }
       let n = 0
-      for (const item of fileItems) {
+      for (const item of safeItems) {
         await s.provider!.writeBytes(`${destDir}/${item.path}`, zipData[item.path])
         n++
       }
-      useUi.getState().toast(`已解压 ${n} 个文件到「${destDir.split('/').pop()}」`, 'success')
+      useUi
+        .getState()
+        .toast(
+          unsafe.length
+            ? `已解压 ${n} 个文件到「${destDir.split('/').pop()}」;${unsafe.length} 个不安全条目(含 .. 路径)已跳过`
+            : `已解压 ${n} 个文件到「${destDir.split('/').pop()}」`,
+          unsafe.length ? 'error' : 'success'
+        )
       await s.refresh()
     } catch (e) {
       useUi.getState().toast(e instanceof Error ? e.message : String(e), 'error')

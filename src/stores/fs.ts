@@ -807,7 +807,10 @@ export const useFs = create<FsState>()((set, get) => {
       }
       // 普通文件按打开方式设置分流(扩展名配置 → 类型配置 → 内置查看器):
       // system=系统默认 app=指定应用 internal=内置查看器
-      const target = useSettings.getState().getOpenWithForEntry(entry)
+      // forceView(Alt+双击/查看器内「上一个/下一个」)同时跳过分流,强制进内置查看器
+      const target = opts?.forceView
+        ? ({ kind: 'internal' } as import('./settings').OpenWithTarget)
+        : useSettings.getState().getOpenWithForEntry(entry)
       if (target.kind === 'system') {
         if (s.provider?.openInSystem) {
           s.provider
@@ -1053,50 +1056,58 @@ export const useFs = create<FsState>()((set, get) => {
     async deletePaths(paths, kinds, permanent = false) {
       const s = get()
       const provider = s.provider!
+      // 与批量复制/移动互斥:作业进行中删除会抢进度条并干扰作业读取源文件
+      if (opAbort) {
+        ui().toast('已有文件操作正在进行,请先等待完成或取消', 'error')
+        return
+      }
       const label = permanent ? '彻底删除中' : '删除中'
       const token = ++opSeq
       s.setOp({ label, done: 0, total: paths.length, canCancel: false })
       const trashed: CopyItem[] = []
       let ok = 0
-      try {
-        for (let i = 0; i < paths.length; i++) {
+      let failed = 0
+      let lastErr: unknown = null
+      // 逐项 try/catch:单项失败(被占用/不支持回收站等)不中断剩余项,成功项照常进撤销栈
+      for (let i = 0; i < paths.length; i++) {
+        try {
           const r = await removeWithResult(provider, paths[i], kinds[i], permanent)
           if (r.trashed) trashed.push({ path: paths[i], kind: kinds[i] })
           ok++
-          const cur = get().op
-          if (cur) set({ op: { ...cur, done: i + 1 } })
+        } catch (e) {
+          failed++
+          lastErr = e
         }
-        // 进了回收站的删除可以「还原」:主进程没有回收站还原接口,
-        // 所以撤销只做提示,同时把记录写进 localStorage 供重启后查看最近删除。
-        if (trashed.length) {
-          const at = Date.now()
-          const records: DeletedRecord[] = trashed.map((it) => ({
-            path: it.path,
-            name: baseName(it.path),
-            kind: it.kind,
-            at,
-            trashed: true,
-          }))
-          const next = [...records, ...get().recentDeleted].slice(0, RECENT_DELETED_MAX)
-          set({ recentDeleted: next })
-          persistRecentDeleted(next)
-          pushUndoOp({ kind: 'trash', items: trashed, at })
-        }
+        const cur = get().op
+        if (cur) set({ op: { ...cur, done: i + 1 } })
+      }
+      // 进了回收站的删除可以「还原」:主进程没有回收站还原接口,
+      // 所以撤销只做提示,同时把记录写进 localStorage 供重启后查看最近删除。
+      if (trashed.length) {
+        const at = Date.now()
+        const records: DeletedRecord[] = trashed.map((it) => ({
+          path: it.path,
+          name: baseName(it.path),
+          kind: it.kind,
+          at,
+          trashed: true,
+        }))
+        const next = [...records, ...get().recentDeleted].slice(0, RECENT_DELETED_MAX)
+        set({ recentDeleted: next })
+        persistRecentDeleted(next)
+        pushUndoOp({ kind: 'trash', items: trashed, at })
+      }
+      if (failed) {
+        ui().toast(`已删除 ${ok} 个,失败 ${failed} 个(${errToast(lastErr)})`, 'error')
+      } else {
         ui().toast(
           trashed.length
             ? `已删除 ${ok} 个项目(已移入回收站,可在回收站中还原)`
             : `已删除 ${ok} 个项目`,
           'success'
         )
-      } catch (e) {
-        // 主进程 fs:remove 失败会直接 throw(不再静默永久删除),这里如实告知
-        ui().toast(
-          permanent
-            ? errToast(e)
-            : `此位置不支持回收站,未执行删除(${errToast(e)})`,
-          'error'
-        )
-      } finally {
+      }
+      {
         if (opSeq === token) get().setOp(null)
         // 正在查看被删除的文件则关闭查看器
         const tab = activeTab()
@@ -1271,6 +1282,25 @@ export const useFs = create<FsState>()((set, get) => {
       })()
       try {
         if (op.kind === 'create') {
+          // 防误删:目录里已被放入内容、或空文件已被编辑(非 0 字节)时拒绝撤销
+          try {
+            if (op.target.kind === 'directory') {
+              const children = await s.provider!.list(op.target.path)
+              if (children.length) {
+                ui().toast(`「${baseName(op.target.path)}」里已有内容,已跳过撤销(不会连内容一起删除)`, 'error')
+                return
+              }
+            } else {
+              const siblings = await s.provider!.list(parentOf(op.target.path))
+              const hit = siblings.find((x) => x.path === op.target.path)
+              if (hit && hit.size > 0) {
+                ui().toast(`「${baseName(op.target.path)}」已被编辑过,已跳过撤销删除`, 'error')
+                return
+              }
+            }
+          } catch {
+            /* 目标已不存在等:继续走删除,由 remove 报出真实错误 */
+          }
           await s.provider!.remove(op.target.path, op.target.kind)
         } else if (op.kind === 'rename') {
           await s.provider!.rename(op.to, op.entryKind, baseName(op.from))
@@ -1289,11 +1319,12 @@ export const useFs = create<FsState>()((set, get) => {
             await copyEntries(s.provider!, [entry], parentOf(pair.source.path), { mode: 'overwrite', move: true })
           }
         }
-        // trash 没有可用的还原接口,撤销只提示去回收站还原
+        // trash 没有可用的还原接口,撤销只提示去回收站还原;
+        // 此时若注册 redo,用户还原文件后再按重做会把刚还原的文件再次删除 —— 不注册
         const trashed = op.kind === 'trash'
         set({
           undoStack: s.undoStack.slice(0, -1),
-          redoStack: [...get().redoStack, redo].slice(-50),
+          redoStack: (trashed ? get().redoStack : [...get().redoStack, redo]).slice(-50),
         })
         ui().toast(trashed ? '文件已移入回收站,请从回收站还原' : '已撤销', trashed ? 'info' : 'success')
         await get().refresh()

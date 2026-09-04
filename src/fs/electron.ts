@@ -289,8 +289,9 @@ export class ElectronProvider implements FSProvider {
     if (this.isMem(path)) return this.mem.rename(path, kind, newName)
     const parent = parentOf(path)
     const target = joinPath(parent, newName)
-    // 仅大小写不同时不算冲突:Windows 上 exists 命中的就是自己
-    if (target !== path && (await this.exists(target))) throw new Error('目标位置已存在同名项目')
+    // 仅大小写不同时不算冲突:Windows 上 exists 命中的就是自己(NTFS 大小写不敏感)
+    const sameFile = this.platform === 'win32' && target.toLowerCase() === path.toLowerCase()
+    if (!sameFile && target !== path && (await this.exists(target))) throw new Error('目标位置已存在同名项目')
     try {
       await this.api.rename(this.toNative(path), this.toNative(target))
       return target

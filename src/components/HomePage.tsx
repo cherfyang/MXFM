@@ -84,8 +84,10 @@ export function HomePage() {
     return indexSizes?.[gid] ?? scan.groups[name].size
   }
 
-  // 「最近文件」:桌面版走索引(全盘六大类按修改时间);浏览器/演示版回退扫描缓存
+  // 「最近文件」:桌面版走索引(全盘六大类按修改时间);浏览器/演示版回退扫描缓存。
+  // 索引构建完成(building true→false)后重新拉取,替换构建前的旧数据
   const hasIndexCounts = !!indexCounts
+  const idxBuilding = useGlobalSearch((st) => st.index.building)
   const [indexRecents, setIndexRecents] = useState<FileEntry[] | null>(null)
   useEffect(() => {
     if (!native || !indexApi()) return
@@ -101,7 +103,7 @@ export function HomePage() {
     return () => {
       alive = false
     }
-  }, [native, hasIndexCounts])
+  }, [native, hasIndexCounts, idxBuilding])
 
   const scanRecents = useMemo(() => {
     const all: FileEntry[] = []

@@ -843,6 +843,27 @@ function runFfmpeg(args) {
   })
 }
 
+/** Chromium(Windows)无需额外解码器就能放的视频编码 */
+const BROWSER_VIDEO_CODECS = new Set(['h264', 'vp8', 'vp9', 'av1'])
+
+/** 探测视频编码:ffmpeg 不给输出文件时会把流信息打到 stderr 后以 1 退出 */
+function probeVideoCodec(srcPath) {
+  return new Promise((resolve) => {
+    const ff = ffmpegPath()
+    if (!ff) return resolve('')
+    const p = spawn(ff, ['-hide_banner', '-nostats', '-i', srcPath], { windowsHide: true })
+    let err = ''
+    p.stderr.on('data', (d) => {
+      err += d
+    })
+    p.on('close', () => {
+      const m = /Video: ([a-zA-Z0-9_]+)/.exec(err)
+      resolve(m ? m[1].toLowerCase() : '')
+    })
+    p.on('error', () => resolve(''))
+  })
+}
+
 ipcMain.handle('transcode:start', async (_e, rawSrc, kind) => {
   if (!ffmpegPath()) return { ok: false, msg: '未找到内置转码组件' }
   const srcPath = checkPath(rawSrc, false)
@@ -867,10 +888,15 @@ ipcMain.handle('transcode:start', async (_e, rawSrc, kind) => {
   const outPath = path.join(TRANSCODE_DIR, hash + '.' + outExt)
   busyTranscodes.add(pathKey(outPath))
   try {
-    // 快速路径:编码本身支持,只是容器不认识 → 直接重封装,秒级完成
+    // 快速路径:编码本身支持、只是容器不认识(AVI/MKV 装着 H.264 等)→ 重封装,秒级完成。
+    // 重封装不改编码:源编码浏览器不支持(如 mpeg4/WMV3)时产物照样放不了,
+    // 会陷入「重封装 → 播放失败 → 再转码」循环,所以必须先探测源编码。
     if (kind === 'video') {
-      const code = await runFfmpeg(['-i', srcPath, '-c', 'copy', '-movflags', '+faststart', outPath])
-      if (code === 0) return { ok: true, outPath }
+      const vcodec = await probeVideoCodec(srcPath)
+      if (BROWSER_VIDEO_CODECS.has(vcodec)) {
+        const code = await runFfmpeg(['-i', srcPath, '-c', 'copy', '-movflags', '+faststart', outPath])
+        if (code === 0) return { ok: true, outPath }
+      }
     }
     // 慢速路径:真转码
     const args =
