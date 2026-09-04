@@ -803,7 +803,7 @@ ipcMain.on('fs:op:cancel', (e, payload) => {
   const op = id ? ops.get(id) : null
   if (!op) return
   // 只允许发起作业的窗口取消,防跨窗口误伤
-  if (op.sender && op.sender !== e.sender.id) return
+  if (op.sender && op.sender.id !== e.sender.id) return
   op.aborted = true
   const cur = op.current
   if (cur) {
@@ -1891,7 +1891,7 @@ async function spawnWinBatch(rp, args, cwd) {
   } catch (e) {
     return { mode: 'denied', reason: e.message }
   }
-  const r = await spawnExec(comspec, ['/d', '/s', '/c', `"${rp}"`, ...safeArgs], { cwd, windowsVerbatimArguments: true })
+  const r = await spawnExec(comspec, ['/d', '/s', '/c', '\"' + [`"${rp}"`, ...safeArgs].join(' ') + '\"'], { cwd, windowsVerbatimArguments: true })
   if (r.ok) return { mode: 'spawn', pid: r.pid }
   if (needsElevation(r.error)) return openBySystem(rp)
   return { mode: 'denied', reason: mapExecError(r.error) }

@@ -21,20 +21,29 @@ export function EpubViewer({ entry }: ViewerProps) {
     if (!url || !hostRef.current) return
     let r: any = null
     setStatus('loading')
+    let alive = true
     ;(async () => {
       try {
         const ePub = (await import('epubjs')).default
+        if (!alive) return
         const book = ePub(url)
         r = book.renderTo(hostRef.current!, { width: '100%', height: '100%', flow: 'paginated' })
-        await r.display()
         rendRef.current = r
+        await r.display()
+        if (!alive) {
+          try { book.destroy(); r.destroy() } catch { /* ignore */ }
+          return
+        }
         setStatus('ready')
       } catch (e) {
-        setStatus('error')
-        setErrMsg((e as Error).message || String(e))
+        if (alive) {
+          setStatus('error')
+          setErrMsg((e as Error).message || String(e))
+        }
       }
     })()
     return () => {
+      alive = false
       try {
         r?.destroy()
       } catch {

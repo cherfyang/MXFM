@@ -740,6 +740,22 @@ export const useFs = create<FsState>()((set, get) => {
       if (!tab) return
       const cur = tab.history[tab.idx]
       if (!path || path === cur) return
+      // 有未保存的查看器修改时弹确认,防止面包屑/侧栏/搜索跳转静默丢弃编辑
+      if (tab.view?.dirty) {
+        ui().showDialog({
+          type: 'confirm',
+          title: '未保存的修改',
+          message: `「${tab.view.entry.name}」有未保存的修改,导航后将丢失。确定要离开吗?`,
+          danger: true,
+          okText: '放弃修改',
+          onOk: () => {
+            ui().closeDialog()
+            get().closeView()
+            get().navigate(path, tabId)
+          },
+        })
+        return
+      }
       const rootName = path.split('/').filter(Boolean)[0]
       if (!s.provider!.hasRoot(rootName)) {
         ui().toast(`未找到根目录「${rootName}」`, 'error')
@@ -764,6 +780,21 @@ export const useFs = create<FsState>()((set, get) => {
       const s = get()
       const tab = activeTab()
       if (!tab || tab.idx === 0) return
+      if (tab.view?.dirty) {
+        ui().showDialog({
+          type: 'confirm',
+          title: '未保存的修改',
+          message: `「${tab.view.entry.name}」有未保存的修改,后退后将丢失。确定要离开吗?`,
+          danger: true,
+          okText: '放弃修改',
+          onOk: () => {
+            ui().closeDialog()
+            get().closeView()
+            get().goBack()
+          },
+        })
+        return
+      }
       const tabs = s.tabs.map((t) => (t.id === tab.id ? { ...t, idx: t.idx - 1, view: null, filter: '' } : t))
       set({ tabs: withSession(tabs, s.activeId), selection: { ...s.selection, [tab.id]: [] } })
       void loadDir(tab.id)
@@ -773,6 +804,21 @@ export const useFs = create<FsState>()((set, get) => {
       const s = get()
       const tab = activeTab()
       if (!tab || tab.idx >= tab.history.length - 1) return
+      if (tab.view?.dirty) {
+        ui().showDialog({
+          type: 'confirm',
+          title: '未保存的修改',
+          message: `「${tab.view.entry.name}」有未保存的修改,前进后将丢失。确定要离开吗?`,
+          danger: true,
+          okText: '放弃修改',
+          onOk: () => {
+            ui().closeDialog()
+            get().closeView()
+            get().goForward()
+          },
+        })
+        return
+      }
       const tabs = s.tabs.map((t) => (t.id === tab.id ? { ...t, idx: t.idx + 1, view: null, filter: '' } : t))
       set({ tabs: withSession(tabs, s.activeId), selection: { ...s.selection, [tab.id]: [] } })
       void loadDir(tab.id)
@@ -807,7 +853,7 @@ export const useFs = create<FsState>()((set, get) => {
       const s = get()
       const tab = activeTab()
       if (!tab) return
-      // 有未保存修改时,切换前确认(查看器内「上一个/下一个」、Enter 打开等所有路径)
+      // 有未保存修改时,切换前确认(nav 上一个/下一个、Enter 打开等所有路径)
       if (tab.view?.dirty && tab.view.entry.path !== entry.path) {
         ui().showDialog({
           type: 'confirm',
@@ -817,6 +863,8 @@ export const useFs = create<FsState>()((set, get) => {
           okText: '放弃修改',
           onOk: () => {
             ui().closeDialog()
+            // 必须先关查看器清掉 dirty,否则重新 openEntry 再次弹确认形成死循环
+            get().closeView()
             get().openEntry(entry, opts)
           },
         })
