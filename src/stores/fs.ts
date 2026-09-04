@@ -1074,6 +1074,7 @@ export const useFs = create<FsState>()((set, get) => {
       const token = ++opSeq
       s.setOp({ label, done: 0, total: paths.length, canCancel: false })
       const trashed: CopyItem[] = []
+      const removed = new Set<string>() // 实际删除成功的路径:只有这些才从选中集里清掉
       let ok = 0
       let failed = 0
       let lastErr: unknown = null
@@ -1082,6 +1083,7 @@ export const useFs = create<FsState>()((set, get) => {
         try {
           const r = await removeWithResult(provider, paths[i], kinds[i], permanent)
           if (r.trashed) trashed.push({ path: paths[i], kind: kinds[i] })
+          removed.add(paths[i])
           ok++
         } catch (e) {
           failed++
@@ -1118,16 +1120,17 @@ export const useFs = create<FsState>()((set, get) => {
       }
       {
         if (opSeq === token) get().setOp(null)
-        // 从选中集中移除已删除路径:幽灵路径会让状态栏计数错误、Delete 静默无效
-        const del = new Set(paths)
-        const tabId = s.activeId
-        const sel = get().selection[tabId]
-        if (sel?.length) {
-          const next = sel.filter((x) => !del.has(x))
-          if (next.length !== sel.length) set({ selection: { ...get().selection, [tabId]: next } })
+        // 从选中集中移除实际删除成功的路径(失败的文件还在,不能清);
+        // 同一文件可能在多个标签页都被选中,遍历所有 tab 清理
+        const tabs = get().tabs
+        for (const t of tabs) {
+          const sel = get().selection[t.id]
+          if (!sel?.length) continue
+          const next = sel.filter((x) => !removed.has(x))
+          if (next.length !== sel.length) set({ selection: { ...get().selection, [t.id]: next } })
+          const anc = get().anchor[t.id]
+          if (anc && removed.has(anc)) set({ anchor: { ...get().anchor, [t.id]: undefined } })
         }
-        const anchor = get().anchor[tabId]
-        if (anchor && del.has(anchor)) set({ anchor: { ...get().anchor, [tabId]: undefined } })
         // 正在查看被删除的文件则关闭查看器
         const tab = activeTab()
         if (tab?.view && paths.includes(tab.view.entry.path)) get().closeView()

@@ -176,9 +176,10 @@ npx electron scripts/gen-icon.cjs
 
 ## 路线图
 
-- [ ] FileSystemObserver 实时刷新(文件变更免手动刷新)
+- [x] 实时刷新(文件变更免手动刷新;主进程 chokidar 实现)
 - [ ] PPTX 只读预览
-- [ ] 全局递归搜索、批量重命名、文件标签
+- [x] 全局递归搜索(全盘文件名索引,Ctrl+Shift+F)
+- [ ] 批量重命名、文件标签
 - [ ] 视频转码进度百分比
 - [ ] 安装包代码签名
 

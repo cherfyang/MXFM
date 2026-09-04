@@ -131,7 +131,13 @@ export class MemoryProvider implements FSProvider {
 
   async remove(path: string, kind: 'file' | 'directory'): Promise<void> {
     const d = this.dir(parentOf(path))
-    d.children!.delete(baseName(path))
+    const name = baseName(path)
+    const node = d.children!.get(name)
+    // 防御:kind 误标时不能把目录整棵静默删掉;路径不存在时报错而非静默成功
+    if (!node) throw new Error(`路径不存在:${path}`)
+    if (kind === 'file' && node.kind !== 'file') throw new Error(`目标是目录:${path}`)
+    if (kind === 'directory' && node.kind !== 'directory') throw new Error(`目标是文件:${path}`)
+    d.children!.delete(name)
   }
 
   async rename(path: string, kind: 'file' | 'directory', newName: string): Promise<string> {

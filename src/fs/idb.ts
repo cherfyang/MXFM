@@ -5,17 +5,27 @@ const DB_NAME = 'mx-filemanager'
 const STORE = 'roots'
 const KV = 'kv'
 
+// 连接单例:每次操作新开连接会持续累积活跃 IDBDatabase,
+// 且版本升级被旧连接阻塞时 onblocked 会让 promise 永不 settle
+let dbPromise: Promise<IDBDatabase> | null = null
+
 function open(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (dbPromise) return dbPromise
+  dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 2)
     req.onupgradeneeded = () => {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'name' })
       if (!db.objectStoreNames.contains(KV)) db.createObjectStore(KV)
     }
-    req.onsuccess = () => resolve(req.result)
+    req.onblocked = () => reject(new Error('IndexedDB 被其他标签页占用,请关闭后重试'))
+    req.onsuccess = () => {
+      req.result.onversionchange = () => req.result.close()
+      resolve(req.result)
+    }
     req.onerror = () => reject(req.error)
   })
+  return dbPromise
 }
 
 export interface StoredRoot {

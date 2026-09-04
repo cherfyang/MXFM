@@ -12,6 +12,8 @@ const MAX_LOAD = 2 * 1024 * 1024
 export function HexViewer({ entry }: ViewerProps) {
   const [bytes, setBytes] = useState<Uint8Array | null>(null)
   const [totalSize, setTotalSize] = useState(0)
+  const entryPathRef = useRef(entry.path)
+  entryPathRef.current = entry.path
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -39,12 +41,13 @@ export function HexViewer({ entry }: ViewerProps) {
     if (!bytes) return
     const provider = useFs.getState().provider
     if (!provider) return
-    // 竞态守卫:读取期间切到别的文件,过期响应不得覆盖新文件内容
-    const pathAtRequest = entry.path
+    // 竞态守卫:pathAtRequest 必须来自 ref(渲染期随 entry 更新)。
+    // 若用闭包里的 entry.path,守卫恒为假 —— 过期响应会把旧文件内容渲染到新文件下
+    const pathAtRequest = entryPathRef.current
     try {
       const nextLen = Math.min(bytes.length + CHUNK, totalSize, MAX_LOAD)
       const data = await provider.readBytes(entry.path, 0, nextLen)
-      if (entry.path !== pathAtRequest) return
+      if (entryPathRef.current !== pathAtRequest) return
       setBytes(data)
     } catch (e) {
       useUi.getState().toast(e instanceof Error ? e.message : String(e), 'error')

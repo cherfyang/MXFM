@@ -103,8 +103,14 @@ export class ElectronProvider implements FSProvider {
     const info = await this.api.boot()
     this.platform = info.platform
     for (const r of info.roots) this.bases.set(r.name, r.path.replace(/\/+$/, '') + '/')
-    for (const s of info.specials) this.bases.set(s.name, s.path.replace(/\/+$/, '') + '/')
+    for (const s of info.specials) {
+      this.bases.set(s.name, s.path.replace(/\/+$/, '') + '/')
+      this.specialRootNames.push(s.name)
+    }
   }
+
+  /** special 根(桌面/下载等)的根名:它们是盘根的子目录,全盘扫描时应剔除以免重复累计 */
+  specialRootNames: string[] = []
 
   rootInfos(): RootInfo[] {
     const out: RootInfo[] = []

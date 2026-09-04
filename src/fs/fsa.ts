@@ -155,12 +155,23 @@ export class FsaProvider implements FSProvider {
     const target = joinPath(parent, newName)
     // 仅大小写不同时不算冲突(部分后端是大小写不敏感的,exists 命中的就是自己)。
     // 但 moveEntry 是 copy→delete:大小写不敏感 FS 上 writeBlob 会原地覆盖同一文件,
-    // 随后 remove(旧名) 把它删掉 —— 改用「旧名 → 临时名 → 新名」两段式
+    // 随后 remove(旧名) 把它删掉 —— 大小写不敏感平台用「旧名→临时名→新名」两段式;
+    // 大小写敏感后端(Linux)上 A.txt 与 a.txt 是两个文件,保持冲突抛错,防止覆盖不相干文件。
+    // 两段式带回滚与临时名残留清理。
     if (target !== path && (await this.exists(target))) {
-      if (target.toLowerCase() !== path.toLowerCase()) throw new Error('目标位置已存在同名项目')
+      const caseInsensitiveBackend = /Win|Mac/i.test(navigator.platform || '')
+      if (target.toLowerCase() !== path.toLowerCase() || !caseInsensitiveBackend) {
+        throw new Error('目标位置已存在同名项目')
+      }
       const tmp = joinPath(parent, `.${baseName(path)}.mx-renaming`)
+      if (await this.exists(tmp)) await this.remove(tmp, kind)
       await this.rename(path, kind, baseName(tmp))
-      return await this.rename(tmp, kind, newName)
+      try {
+        return await this.rename(tmp, kind, newName)
+      } catch (e) {
+        await this.rename(tmp, kind, baseName(path)).catch(() => {})
+        throw e
+      }
     }
     const entry: FileEntry = { name: baseName(path), path, kind, size: 0, modified: null, ext: extOf(baseName(path)) }
     await moveEntry(this, entry, target)

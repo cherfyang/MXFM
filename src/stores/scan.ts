@@ -113,14 +113,20 @@ export const useScan = create<ScanState>()((set, get) => ({
     if (!provider) return
     const allRoots = fsStore.roots.map((r) => '/' + r.name)
     if (!allRoots.length) return
-    // 桌面版只扫盘根:根列表里还含 桌面/下载/文档 等 special 根,它们是盘根的子目录,
-    // 全部入队会导致同一批文件经两条路径各计一次(count/size 虚高、recent 重复)
+    // 桌面版只扫盘根 + 用户手动添加的根:根列表里还含 桌面/下载/文档 等 special 根,
+    // 它们是盘根的子目录,全部入队会导致同一批文件经两条路径各计一次(count/size 虚高、recent 重复)
     const platform = (provider as { platform?: string }).platform
+    const specialNames: string[] = (provider as { specialRootNames?: string[] }).specialRootNames ?? []
     const roots =
       provider.kind === 'native'
         ? platform === 'win32'
-          ? allRoots.filter((r) => /^\/[A-Za-z]:$/.test(r))
-          : allRoots.slice(0, 1)
+          ? allRoots.filter((r) => {
+              const n = r.slice(1)
+              return /^[A-Za-z]:$/.test(n) || !specialNames.includes(n)
+            })
+          : platform === 'android'
+            ? allRoots
+            : allRoots.slice(0, 1)
         : allRoots
     if (!roots.length) return
 

@@ -38,6 +38,9 @@ type Mode = 'split' | 'edit' | 'preview'
 export function MarkdownViewer({ entry, readOnly, api }: ViewerProps) {
   // 复用 TextViewer 的加载与保存逻辑成本太高,这里独立实现(共享 useCodeEditor)
   const [doc, setDoc] = useState<string | null>(null)
+  // 预览内容独立于 doc:doc 只在文件加载时变化(它是 useCodeEditor 的重建依赖),
+  // 编辑内容走 previewSrc,避免每键销毁重建 CodeMirror(光标跳文首/IME 中断)
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState<Mode>('split')
   const savedRef = useRef<string | null>(null)
@@ -63,6 +66,7 @@ export function MarkdownViewer({ entry, readOnly, api }: ViewerProps) {
         savedRef.current = text
         getTextRef.current = () => text
         setDoc(text)
+        setPreviewSrc(text)
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e))
       }
@@ -80,8 +84,7 @@ export function MarkdownViewer({ entry, readOnly, api }: ViewerProps) {
     readOnly,
     onChange: (text) => {
       getTextRef.current = () => text
-      // 预览渲染的是 useDeferredValue(doc):不同步 doc 的话预览永远停在打开时的内容
-      setDoc(text)
+      setPreviewSrc(text)
       api.setDirty(text !== savedRef.current)
     },
     onSave: () => void doSave(),
@@ -111,8 +114,8 @@ export function MarkdownViewer({ entry, readOnly, api }: ViewerProps) {
   }, [entry.path, readOnly, doc])
 
   // 击键防抖渲染:编辑时预览跟随 deferred 值,大文档不再每键全量重渲染
-  const deferredDoc = useDeferredValue(doc)
-  const html = useMemo(() => md.render(deferredDoc ?? ''), [deferredDoc])
+  const deferredSrc = useDeferredValue(previewSrc)
+  const html = useMemo(() => md.render(deferredSrc ?? doc ?? ''), [deferredSrc, doc])
 
   if (error) return <div className="flex h-full items-center justify-center text-txt2">{error}</div>
   if (doc === null)
