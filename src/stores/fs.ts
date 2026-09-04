@@ -328,6 +328,17 @@ export const useFs = create<FsState>()((set, get) => {
         ui().toast(`无法把「${bad.name}」移动到其自身内部`, 'error')
         return
       }
+      // 目标 = 源所在目录本身:无操作(面包屑末段等误拖)。不拦的话覆盖路径会
+      // 把整个文件夹(含内容)按 walkDir(src→src) 自改名后 rm 永久删除
+      const inDest = entries.filter((e) => parentOf(e.path) === destDir)
+      if (inDest.length === entries.length) {
+        ui().toast('源和目标是同一个文件夹', 'info')
+        return
+      }
+      if (inDest.length) {
+        entries = entries.filter((e) => parentOf(e.path) !== destDir)
+        ui().toast(`「${inDest[0].name}」等 ${inDest.length} 项已在目标文件夹中,已跳过`, 'info')
+      }
     }
     const existence = await Promise.all(
       entries.map(async (e) => ({ e, exists: await provider.exists(joinPath(destDir, e.name)) }))
@@ -407,6 +418,10 @@ export const useFs = create<FsState>()((set, get) => {
       } finally {
         if (opAbort === ac) opAbort = null
         if (opSeq === token) get().setOp(null)
+        // destDir 标签可能不是活动标签(作业期间切走了):
+        // watch 事件在作业期间被抑制,结束后必须主动刷新它,否则列表陈旧
+        const destTab = get().tabs.find((t) => t.history[t.idx] === destDir)
+        if (destTab) await loadDir(destTab.id)
         await get().refresh()
       }
     }
@@ -1368,7 +1383,9 @@ export const useFs = create<FsState>()((set, get) => {
         ui().toast('已重做', 'success')
         await get().refresh()
       } catch (e) {
-        ui().toast(errToast(e), 'error')
+        // 失败时回栈:瞬时失败(目标被占用等)不应永久丢失重做链的一环
+        set({ redoStack: [...get().redoStack, entry].slice(-50) })
+        ui().toast(`重做失败:${errToast(e)}`, 'error')
       }
     },
 

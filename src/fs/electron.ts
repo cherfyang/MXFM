@@ -58,7 +58,9 @@ interface Api {
 }
 
 /** rename 失败但主进程批量通道可以兜底的 errno(与 main.cjs 的 RENAME_FALLBACK 对齐) */
-const RENAME_FALLBACK = /EXDEV|EPERM|EACCES|ENOTEMPTY|EEXIST|EISDIR|ENOTDIR|EBUSY|EMLINK|ENOSPC|EROFS/
+// 仅跨盘/目标非空等结构性原因才降级流式搬运;EPERM/EACCES/EBUSY(占用/权限)直接报错,
+// 否则 rename 被占用的文件会静默走复制+删源,报成功但新旧两份并存
+const RENAME_FALLBACK = /EXDEV|ENOTEMPTY|EEXIST|EISDIR|ENOTDIR|EMLINK|ENOSPC|EROFS/
 
 function mxApi(): { grant?(paths: string[]): void } | undefined {
   if (typeof window === 'undefined') return undefined

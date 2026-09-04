@@ -497,7 +497,7 @@ let activeOpId = null
 let opSeq = 0
 const PROGRESS_STEP = 8 * 1024 * 1024 // 单文件每累计 8MB 上报一次,避免刷屏
 // rename 失败但值得降级为复制+删源的错误码(其余错误视为真失败,不静默改写语义)
-const RENAME_FALLBACK = new Set(['EXDEV', 'EPERM', 'EACCES', 'ENOTEMPTY', 'EEXIST', 'EISDIR', 'ENOTDIR', 'EBUSY', 'EMLINK', 'ENOSPC', 'EROFS'])
+const RENAME_FALLBACK = new Set(['EXDEV', 'ENOTEMPTY', 'EEXIST', 'EISDIR', 'ENOTDIR', 'EMLINK', 'ENOSPC', 'EROFS'])
 
 class OpAborted extends Error {
   constructor() {
@@ -715,7 +715,14 @@ async function runOp(sender, id, payload) {
           throw e
         }
         f.status = 'copied'
-        if (kind === 'move') await fsp.unlink(f.src).catch(() => {})
+        if (kind === 'move') {
+          try {
+            await fsp.unlink(f.src)
+          } catch {
+            f.status = 'failed'
+            f.error = '源文件删除失败(可能被占用)'
+          }
+        }
         bytesDone += f.size
         sendProgress(sender, id, i + 1, count, bytesDone, bytesTotal, name)
         continue
@@ -724,7 +731,15 @@ async function runOp(sender, id, payload) {
         sendProgress(sender, id, i, count, bytesDone + written, bytesTotal, name)
       })
       f.status = 'copied'
-      if (kind === 'move') await fsp.unlink(f.src).catch(() => {})
+      if (kind === 'move') {
+        try {
+          await fsp.unlink(f.src)
+        } catch {
+          // 源删除失败:文件仍在原位,如实标记失败而非谎报完成
+          f.status = 'failed'
+          f.error = '源文件删除失败(可能被占用)'
+        }
+      }
       bytesDone += f.size
       sendProgress(sender, id, i + 1, count, bytesDone, bytesTotal, name)
     } catch (e) {
@@ -1131,10 +1146,20 @@ ipcMain.handle('fs:watch:stopAll', () => {
 // mac/Linux:public.file-url,每行一个 file:// URL(encodeURI 编码非 ASCII 字符)。
 // 妥协:mac 的 Finder 不支持「剪切文件」(Cmd+X 只对文本生效),写入后读回 cut 恒为 false;
 //       Linux 各文件管理器对剪切标记支持不一,同样忽略。
+/** 构造 CF_HDROP:20 字节 DROPFILES 头 + 双 NUL 结尾的 UTF-16 路径列表。
+ *  资源管理器只认 CF_HDROP;FileNameW 规范上只放单个文件名,粘贴侧不识别 */
 function clipEncodeWindows(paths, cut) {
-  const buf = Buffer.concat([...paths.map((p) => Buffer.from(p + '\0', 'utf16le')), Buffer.alloc(2)])
-  clipboard.writeBuffer('FileNameW', buf)
+  const NUL = String.fromCharCode(0)
+  const header = Buffer.alloc(20)
+  header.writeUInt32LE(20, 0) // pFiles:文件列表偏移
+  header.writeUInt32LE(0, 8) // pt.x
+  header.writeUInt32LE(0, 12) // pt.y
+  header.writeUInt32LE(1, 16) // fWide:UTF-16
+  const list = Buffer.concat([...paths.map((p) => Buffer.from(p + NUL, 'utf16le')), Buffer.from(NUL + NUL, 'utf16le')])
+  clipboard.writeBuffer('CF_HDROP', Buffer.concat([header, list]))
   clipboard.writeBuffer('Preferred DropEffect', Buffer.from([cut ? 2 : 5, 0, 0, 0]))
+  // FileNameW 保留单文件场景的部分兼容(一些老程序读它)
+  if (paths.length === 1) clipboard.writeBuffer('FileNameW', Buffer.from(paths[0] + NUL, 'utf16le'))
 }
 
 function clipEncodePosix(paths) {
@@ -1143,19 +1168,37 @@ function clipEncodePosix(paths) {
 }
 
 function clipDecodeWindows() {
-  let buf
+  // Explorer 复制(含多选)只写 CF_HDROP:优先读它,失败再回落 FileNameW(旧版单文件兼容)
+  let buf = null
   try {
-    buf = clipboard.readBuffer('FileNameW')
+    buf = clipboard.readBuffer('CF_HDROP')
   } catch {
-    return null
+    buf = null
   }
-  if (!buf || buf.length < 4) return null
-  // 双 \0 结尾的路径列表;空串过滤掉,同时容忍中间出现的空项
-  const paths = buf
-    .toString('utf16le')
-    .split('\0')
-    .map((p) => p.trim())
-    .filter(Boolean)
+  let paths = []
+  if (buf && buf.length > 20) {
+    // 跳过 20 字节 DROPFILES 头(pFiles/pt/fWide),其余是双 NUL 结尾的 UTF-16 路径列表
+    paths = buf
+      .subarray(20)
+      .toString('utf16le')
+      .split(String.fromCharCode(0))
+      .map((p) => p.trim())
+      .filter(Boolean)
+  }
+  if (!paths.length) {
+    try {
+      buf = clipboard.readBuffer('FileNameW')
+    } catch {
+      buf = null
+    }
+    if (buf && buf.length >= 2) {
+      paths = buf
+        .toString('utf16le')
+        .split(String.fromCharCode(0))
+        .map((p) => p.trim())
+        .filter(Boolean)
+    }
+  }
   if (!paths.length) return null
   let cut = false
   try {
