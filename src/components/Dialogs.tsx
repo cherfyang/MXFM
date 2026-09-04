@@ -500,6 +500,13 @@ function OpenWithDialog() {
   const fs = useFs()
   const [ext, setExt] = useState('')
   const close = () => useUi.getState().closeDialog()
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const provider = fs.provider
   const canPick = provider?.kind === 'native' && typeof provider.pickOpenWithApp === 'function'
 
@@ -693,6 +700,13 @@ function TargetRow(props: {
 function ExecPolicyDialog() {
   const [items, setItems] = useState<{ path: string; allow: boolean; at: number }[] | null>(null)
   const close = () => useUi.getState().closeDialog()
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const reload = async () => {
     try {

@@ -807,6 +807,21 @@ export const useFs = create<FsState>()((set, get) => {
       const s = get()
       const tab = activeTab()
       if (!tab) return
+      // 有未保存修改时,切换前确认(查看器内「上一个/下一个」、Enter 打开等所有路径)
+      if (tab.view?.dirty && tab.view.entry.path !== entry.path) {
+        ui().showDialog({
+          type: 'confirm',
+          title: '未保存的修改',
+          message: `「${tab.view.entry.name}」有未保存的修改,切换后将丢失。确定要离开吗?`,
+          danger: true,
+          okText: '放弃修改',
+          onOk: () => {
+            ui().closeDialog()
+            get().openEntry(entry, opts)
+          },
+        })
+        return
+      }
       const entryCat = categoryOf(entry)
       if (entry.kind === 'directory' && entryCat !== 'executable') {
         // 普通文件夹导航;.app 等 bundle 不是文件夹,走下面的查看/运行

@@ -127,8 +127,10 @@ export function XlsxViewer({ entry, readOnly, api }: ViewerProps) {
   const setCell = (r: number, c: number, text: string) => {
     if (!wb || !ws || !range) return
     const addr = XLSX.utils.encode_cell({ r: range.s.r + r, c: range.s.c + c })
+    // 前导零文本(编号/单号类)不转数字:一旦转了 "007"→7 就永久丢原始格式
+    const looksLeadingZero = /^-?0\d/.test(text.replace(/,/g, ''))
     const num = Number(text.replace(/,/g, ''))
-    if (text !== '' && Number.isFinite(num) && /^-?\d*\.?\d+([eE][+-]?\d+)?$/.test(text.replace(/,/g, ''))) {
+    if (!looksLeadingZero && text !== '' && Number.isFinite(num) && /^-?\d*\.?\d+([eE][+-]?\d+)?$/.test(text.replace(/,/g, ''))) {
       ws[addr] = { t: 'n', v: num }
     } else if (text === '') {
       delete ws[addr]

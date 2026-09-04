@@ -912,6 +912,7 @@ const TRANSCODE_DIR = path.join(os.tmpdir(), 'mx-fm-transcode')
 const TRANSCODE_MAX_AGE = 7 * 24 * 60 * 60 * 1000
 /** 正在写入/正在播放的转码产物,清理时跳过 */
 const busyTranscodes = new Set()
+const transInflight = new Map() // pathKey(outPath) → Promise:同文件并发转码单飞,避免两个 ffmpeg 交错写坏产物
 
 /** 清理 7 天前(mtime)的历史转码产物;正在使用的跳过 */
 async function cleanTranscodeCache() {
@@ -1009,10 +1010,14 @@ ipcMain.handle('transcode:start', async (_e, rawSrc, kind) => {
     .digest('hex')
     .slice(0, 12)
   const outPath = path.join(TRANSCODE_DIR, hash + '.' + outExt)
-  const mySeq = ++transSeq
-  const cancelled = () => mySeq !== transSeq // transcode:cancel 会使代数失效
-  busyTranscodes.add(pathKey(outPath))
-  try {
+  const inflightKey = pathKey(outPath)
+  // 同产物并发单飞:第二个 invoke 直接复用第一次的 Promise,
+  // 避免两个 ffmpeg -y 交错写坏同一缓存,以及后启动者的代数失效误判前者为已取消
+  if (transInflight.has(inflightKey)) return transInflight.get(inflightKey)
+  const mySeq = transSeq // 复用当前代数:transcode:cancel 使其失效即可
+  const cancelled = () => mySeq !== transSeq
+  busyTranscodes.add(inflightKey)
+  const job = (async () => {
     // 快速路径:编码本身支持、只是容器不认识(AVI/MKV 装着 H.264 等)→ 重封装,秒级完成。
     // 重封装不改编码:源编码浏览器不支持(如 mpeg4/WMV3)时产物照样放不了,
     // 会陷入「重封装 → 播放失败 → 再转码」循环,所以必须先探测源编码。
@@ -1047,11 +1052,18 @@ ipcMain.handle('transcode:start', async (_e, rawSrc, kind) => {
     }
     if (code === 0) return { ok: true, outPath }
     return { ok: false, msg: '转码失败(可能是不支持的编码或文件已损坏)' }
+  })()
+  transInflight.set(inflightKey, job)
+  try {
+    const result = await job
+    if (!result.ok) await fsp.rm(outPath, { force: true }).catch(() => {})
+    return result
   } finally {
-    // 注意:产物还要给播放器继续读,这里只是不再「正在写入」,7 天过期策略照常生效
-    busyTranscodes.delete(pathKey(outPath))
+    busyTranscodes.delete(inflightKey)
+    transInflight.delete(inflightKey)
   }
 })
+
 
 ipcMain.handle('transcode:cancel', () => {
   // 代数 +1:探测/转码任一阶段收到都立即识别为已取消,不再落入下一阶段
@@ -1136,8 +1148,9 @@ ipcMain.handle('fs:watch:stop', (e, id) => {
   destroyWatch(Number(id))
 })
 
-ipcMain.handle('fs:watch:stopAll', () => {
-  stopAllWatchers()
+ipcMain.handle('fs:watch:stopAll', (e) => {
+  // 只停发起窗口自己的监听:多窗口下关 A 窗不能杀 B 窗的目录监听
+  stopWatchersOfSender(e.sender)
 })
 
 // ---------- 系统剪贴板文件读写(本应用 ⇄ Explorer/Finder 互拷) ----------
@@ -3137,17 +3150,20 @@ async function buildGlobalIndex() {
     await Promise.all(Array.from({ length: INDEX_LIMITS.concurrency }, () => worker()))
     if (!indexState.aborted) {
       const n = entries.length
+      // 换装期间挂 parsing 门:防止 query/getOrder 在半填充 lower 上计算并缓存错误排序
+      indexState.parsing = true
       indexState.entries = entries
       indexState.sizes = Float64Array.from(sizes)
       indexState.mtimes = Float64Array.from(mtimes)
       indexState.cats = Uint8Array.from(cats)
       resetDerived(n)
       indexState.lastBuildAt = Date.now()
-      // 等 lower 副本就绪再解除 building:分类查询的排序依赖它完整
+      // 等 lower 副本就绪再解除 building/parsing:分类查询的排序依赖它完整
       await rebuildLower(n)
       const stats = computeGroupStats()
       indexState.counts = stats.counts
       indexState.groupSizes = stats.sizes
+      indexState.parsing = false
       saveIndexFile()
     }
   } finally {
