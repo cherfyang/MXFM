@@ -195,6 +195,8 @@ export function TextViewer({ entry, readOnly, api }: ViewerProps) {
   })
 
   const doSave = async () => {
+    // 只读模式(嵌入预览/强制加载)不允许写盘:即使没有修改也会重写文件(丢 BOM/转编码)
+    if (readOnly) return
     try {
       const provider = useFs.getState().provider
       if (!provider) return

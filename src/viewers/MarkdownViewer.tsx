@@ -80,6 +80,8 @@ export function MarkdownViewer({ entry, readOnly, api }: ViewerProps) {
     readOnly,
     onChange: (text) => {
       getTextRef.current = () => text
+      // 预览渲染的是 useDeferredValue(doc):不同步 doc 的话预览永远停在打开时的内容
+      setDoc(text)
       api.setDirty(text !== savedRef.current)
     },
     onSave: () => void doSave(),

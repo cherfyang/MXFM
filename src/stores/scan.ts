@@ -108,9 +108,20 @@ export const useScan = create<ScanState>()((set, get) => ({
 
   async scan() {
     if (get().running) return
-    const provider = (await import('./fs')).useFs.getState().provider
+    const fsStore = (await import('./fs')).useFs.getState()
+    const provider = fsStore.provider
     if (!provider) return
-    const roots = (await import('./fs')).useFs.getState().roots.map((r) => '/' + r.name)
+    const allRoots = fsStore.roots.map((r) => '/' + r.name)
+    if (!allRoots.length) return
+    // 桌面版只扫盘根:根列表里还含 桌面/下载/文档 等 special 根,它们是盘根的子目录,
+    // 全部入队会导致同一批文件经两条路径各计一次(count/size 虚高、recent 重复)
+    const platform = (provider as { platform?: string }).platform
+    const roots =
+      provider.kind === 'native'
+        ? platform === 'win32'
+          ? allRoots.filter((r) => /^\/[A-Za-z]:$/.test(r))
+          : allRoots.slice(0, 1)
+        : allRoots
     if (!roots.length) return
 
     set({ running: true, scannedDirs: 0 })
@@ -164,6 +175,14 @@ export const useScan = create<ScanState>()((set, get) => ({
     }
 
     await Promise.all([worker(), worker(), worker(), worker()])
+
+    // 全部目录读取失败(句柄授权过期/盘不可用)时保留上次缓存,不用空结果覆盖
+    if (scanned === 0 && totalFiles === 0) {
+      set({ running: false, scannedDirs: 0 })
+      const { useUi } = await import('./ui')
+      useUi.getState().toast('扫描失败:所有目录都无法读取,已保留上次结果', 'error')
+      return
+    }
 
     for (const g of Object.values(groups)) {
       g.recent.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0))

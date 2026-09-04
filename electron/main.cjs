@@ -922,6 +922,7 @@ function ffmpegPath() {
 }
 
 let transProc = null
+let transSeq = 0 // 转码请求代数:cancel 使旧代数作废,防止杀错/探测期无法取消
 
 function runFfmpeg(args) {
   return new Promise((resolve) => {
@@ -939,21 +940,25 @@ function runFfmpeg(args) {
 /** Chromium(Windows)无需额外解码器就能放的视频编码 */
 const BROWSER_VIDEO_CODECS = new Set(['h264', 'vp8', 'vp9', 'av1'])
 
-/** 探测视频编码:ffmpeg 不给输出文件时会把流信息打到 stderr 后以 1 退出 */
-function probeVideoCodec(srcPath) {
+/** 探测媒体流:ffmpeg 不给输出文件时会把流信息打到 stderr 后以 1 退出 */
+function probeMedia(srcPath) {
   return new Promise((resolve) => {
     const ff = ffmpegPath()
-    if (!ff) return resolve('')
+    if (!ff) return resolve({ video: '', audio: false })
+    const mySeq = ++transSeq
     const p = spawn(ff, ['-hide_banner', '-nostats', '-i', srcPath], { windowsHide: true })
+    transProc = p
     let err = ''
     p.stderr.on('data', (d) => {
       err += d
     })
     p.on('close', () => {
-      const m = /Video: ([a-zA-Z0-9_]+)/.exec(err)
-      resolve(m ? m[1].toLowerCase() : '')
+      // 探测期间被取消:返回 cancelled 标记,调用方不再落入慢速转码
+      if (mySeq !== transSeq) return resolve({ video: '', audio: false, cancelled: true })
+      const vm = /Video: ([a-zA-Z0-9_]+)/.exec(err)
+      resolve({ video: vm ? vm[1].toLowerCase() : '', audio: /Audio: /.test(err) })
     })
-    p.on('error', () => resolve(''))
+    p.on('error', () => resolve({ video: '', audio: false }))
   })
 }
 
@@ -979,15 +984,29 @@ ipcMain.handle('transcode:start', async (_e, rawSrc, kind) => {
     .digest('hex')
     .slice(0, 12)
   const outPath = path.join(TRANSCODE_DIR, hash + '.' + outExt)
+  const mySeq = ++transSeq
+  const cancelled = () => mySeq !== transSeq // transcode:cancel 会使代数失效
   busyTranscodes.add(pathKey(outPath))
   try {
     // 快速路径:编码本身支持、只是容器不认识(AVI/MKV 装着 H.264 等)→ 重封装,秒级完成。
     // 重封装不改编码:源编码浏览器不支持(如 mpeg4/WMV3)时产物照样放不了,
     // 会陷入「重封装 → 播放失败 → 再转码」循环,所以必须先探测源编码。
     if (kind === 'video') {
-      const vcodec = await probeVideoCodec(srcPath)
-      if (BROWSER_VIDEO_CODECS.has(vcodec)) {
+      const probe = await probeMedia(srcPath)
+      if (probe.cancelled || cancelled()) {
+        await fsp.rm(outPath, { force: true }).catch(() => {})
+        return { ok: false, msg: '已取消' }
+      }
+      if (!probe.video) {
+        // 纯音频容器被当视频打开:明确报错,不落入必败的 libx264 视频转码
+        return { ok: false, msg: probe.audio ? '该文件不含视频流,无法转码为视频' : '无法识别媒体流信息' }
+      }
+      if (BROWSER_VIDEO_CODECS.has(probe.video)) {
         const code = await runFfmpeg(['-i', srcPath, '-c', 'copy', '-movflags', '+faststart', outPath])
+        if (cancelled()) {
+          await fsp.rm(outPath, { force: true }).catch(() => {})
+          return { ok: false, msg: '已取消' }
+        }
         if (code === 0) return { ok: true, outPath }
       }
     }
@@ -997,6 +1016,10 @@ ipcMain.handle('transcode:start', async (_e, rawSrc, kind) => {
         ? ['-i', srcPath, '-vn', '-c:a', 'libmp3lame', '-q:a', '3', outPath]
         : ['-i', srcPath, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', outPath]
     const code = await runFfmpeg(args)
+    if (cancelled()) {
+      await fsp.rm(outPath, { force: true }).catch(() => {})
+      return { ok: false, msg: '已取消' }
+    }
     if (code === 0) return { ok: true, outPath }
     return { ok: false, msg: '转码失败(可能是不支持的编码或文件已损坏)' }
   } finally {
@@ -1006,6 +1029,8 @@ ipcMain.handle('transcode:start', async (_e, rawSrc, kind) => {
 })
 
 ipcMain.handle('transcode:cancel', () => {
+  // 代数 +1:探测/转码任一阶段收到都立即识别为已取消,不再落入下一阶段
+  transSeq++
   try {
     transProc?.kill()
   } catch {

@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { Plus, Loader2 } from 'lucide-react'
 import type { ViewerProps } from './registry'
 import { useFs } from '../stores/fs'
+import { useUi } from '../stores/ui'
 import { fmtBytes } from '../utils/format'
 
 const CHUNK = 64 * 1024
@@ -38,9 +39,16 @@ export function HexViewer({ entry }: ViewerProps) {
     if (!bytes) return
     const provider = useFs.getState().provider
     if (!provider) return
-    const nextLen = Math.min(bytes.length + CHUNK, totalSize, MAX_LOAD)
-    const data = await provider.readBytes(entry.path, 0, nextLen)
-    setBytes(data)
+    // 竞态守卫:读取期间切到别的文件,过期响应不得覆盖新文件内容
+    const pathAtRequest = entry.path
+    try {
+      const nextLen = Math.min(bytes.length + CHUNK, totalSize, MAX_LOAD)
+      const data = await provider.readBytes(entry.path, 0, nextLen)
+      if (entry.path !== pathAtRequest) return
+      setBytes(data)
+    } catch (e) {
+      useUi.getState().toast(e instanceof Error ? e.message : String(e), 'error')
+    }
   }
 
   const rowCount = bytes ? Math.ceil(bytes.length / 16) : 0

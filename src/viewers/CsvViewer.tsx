@@ -4,7 +4,7 @@ import { Loader2, AlertTriangle } from 'lucide-react'
 import type { ViewerProps } from './registry'
 import { useFs } from '../stores/fs'
 import { useUi } from '../stores/ui'
-import { fmtBytes, decodeSmart } from '../utils/format'
+import { fmtBytes, decodeSmart, encodeSmart } from '../utils/format'
 
 const SIZE_LIMIT = 30 * 1024 * 1024
 const COL_CAP = 256
@@ -100,6 +100,7 @@ function serialize(rows: string[][], delim: string): string {
 
 export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
   const [matrix, setMatrix] = useState<string[][] | null>(null)
+  const [encoding, setEncoding] = useState('UTF-8')
   const [error, setError] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [editing, setEditing] = useState<{ r: number; c: number } | null>(null)
@@ -120,7 +121,9 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
         if (f.size > SIZE_LIMIT) {
           if (alive) setError(`文件较大(${fmtBytes(f.size)}),仅支持预览前 30000 行,且不能编辑保存`)
           const head = new Uint8Array(await f.slice(0, 4 * 1024 * 1024).arrayBuffer())
-          const { text } = decodeSmart(head)
+          const dec = decodeSmart(head)
+          setEncoding(dec.encoding)
+          const text = dec.text
           const rows = parseCsv(text, sniffDelim(text)).slice(0, 30000)
           delimRef.current = sniffDelim(text)
           if (alive) {
@@ -130,7 +133,9 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
           return
         }
         const bytes = new Uint8Array(await f.arrayBuffer())
-        const { text } = decodeSmart(bytes)
+        const dec = decodeSmart(bytes)
+        setEncoding(dec.encoding)
+        const text = dec.text
         const delim = sniffDelim(text)
         delimRef.current = delim
         const rows = parseCsv(text, delim)
@@ -150,7 +155,12 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
     if (!matrix) return
     try {
       const provider = useFs.getState().provider!
-      await provider.writeText(entry.path, serialize(matrix, delimRef.current))
+      // 按检测到的原编码回写(UTF-16 走 encodeSmart;GBK 暂只能转 UTF-8,是已知限制)
+      if (encoding === 'UTF-16LE' || encoding === 'UTF-16BE') {
+        await provider.writeBytes(entry.path, encodeSmart(serialize(matrix, delimRef.current), encoding))
+      } else {
+        await provider.writeText(entry.path, serialize(matrix, delimRef.current))
+      }
       api.setDirty(false)
       useUi.getState().toast('CSV 已保存', 'success')
     } catch (e) {

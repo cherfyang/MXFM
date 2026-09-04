@@ -153,8 +153,15 @@ export class FsaProvider implements FSProvider {
     if (this.isMem(path)) return this.mem.rename(path, kind, newName)
     const parent = parentOf(path)
     const target = joinPath(parent, newName)
-    // 仅大小写不同时不算冲突(部分后端是大小写不敏感的,exists 命中的就是自己)
-    if (target !== path && (await this.exists(target))) throw new Error('目标位置已存在同名项目')
+    // 仅大小写不同时不算冲突(部分后端是大小写不敏感的,exists 命中的就是自己)。
+    // 但 moveEntry 是 copy→delete:大小写不敏感 FS 上 writeBlob 会原地覆盖同一文件,
+    // 随后 remove(旧名) 把它删掉 —— 改用「旧名 → 临时名 → 新名」两段式
+    if (target !== path && (await this.exists(target))) {
+      if (target.toLowerCase() !== path.toLowerCase()) throw new Error('目标位置已存在同名项目')
+      const tmp = joinPath(parent, `.${baseName(path)}.mx-renaming`)
+      await this.rename(path, kind, baseName(tmp))
+      return await this.rename(tmp, kind, newName)
+    }
     const entry: FileEntry = { name: baseName(path), path, kind, size: 0, modified: null, ext: extOf(baseName(path)) }
     await moveEntry(this, entry, target)
     for (const key of [...this.dirCache.keys()]) {

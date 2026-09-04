@@ -25,6 +25,8 @@ export function AudioViewer({ entry, nav }: ViewerProps) {
     setErr(false)
     setOverrideUrl(null)
     setForced(false)
+    setPlaying(false) // 切歌时旧 audio 元素被卸载不会触发 onPause,按钮状态要手动复位
+    setDuration(0)
   }, [entry.path])
 
   // 键盘 ↑↓ 调节音量
