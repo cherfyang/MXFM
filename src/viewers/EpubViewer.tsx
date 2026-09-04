@@ -8,11 +8,16 @@ import { IconBtn } from '../components/ui'
 export function EpubViewer({ entry }: ViewerProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const rendRef = useRef<any>(null)
-  const [url] = useBlobUrlSafe(entry)
+  const [url, loadFailed] = useBlobUrlSafe(entry)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [errMsg, setErrMsg] = useState('')
 
   useEffect(() => {
+    if (loadFailed) {
+      setStatus('error')
+      setErrMsg('无法读取电子书文件(可能已被删除或移动)')
+      return
+    }
     if (!url || !hostRef.current) return
     let r: any = null
     setStatus('loading')
@@ -88,12 +93,14 @@ export function EpubViewer({ entry }: ViewerProps) {
   )
 }
 
-/** useBlobUrl 的简易包装(避免循环依赖问题,行为一致) */
-function useBlobUrlSafe(entry: import('../fs/types').FileEntry): [string | null] {
+/** useBlobUrl 的简易包装(避免循环依赖问题,行为一致);第二返回值 = 读取失败 */
+function useBlobUrlSafe(entry: import('../fs/types').FileEntry): [string | null, boolean] {
   const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
     let u: string | null = null
     let alive = true
+    setFailed(false)
     ;(async () => {
       try {
         const provider = (await import('../stores/fs')).useFs.getState().provider
@@ -102,7 +109,7 @@ function useBlobUrlSafe(entry: import('../fs/types').FileEntry): [string | null]
         u = URL.createObjectURL(f)
         if (alive) setUrl(u)
       } catch {
-        /* ignore */
+        if (alive) setFailed(true)
       }
     })()
     return () => {
@@ -110,5 +117,5 @@ function useBlobUrlSafe(entry: import('../fs/types').FileEntry): [string | null]
       if (u) URL.revokeObjectURL(u)
     }
   }, [entry.path, entry.size, entry.modified])
-  return [url]
+  return [url, failed]
 }

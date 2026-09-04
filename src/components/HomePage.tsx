@@ -99,7 +99,10 @@ export function HomePage() {
           (p?.items ?? []).map(itemToFileEntry).filter((e): e is FileEntry => e !== null)
         )
       })
-      .catch(() => {})
+      .catch(() => {
+        // 失败置为空数组:区分「加载中」(null),避免永久卡在加载态
+        if (alive) setIndexRecents([])
+      })
     return () => {
       alive = false
     }

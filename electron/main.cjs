@@ -56,6 +56,27 @@ function createWindow() {
     },
   })
   wins.add(w)
+  // 导航防护:markdown/docx/epub 预览都会产出可点击的 <a href>,
+  // 若放行窗口导航到远程页面,重新注入的 preload 会把 mxAPI 全套文件能力暴露给远程脚本。
+  // 外链一律转交系统浏览器,应用内永不导航。
+  {
+    const wc = w.webContents
+    wc.setWindowOpenHandler(({ url }) => {
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {})
+      return { action: 'deny' }
+    })
+    wc.on('will-navigate', (e, url) => {
+      const devUrl = 'http://localhost:5188'
+      const allowed =
+        url.startsWith('file://') ||
+        url.startsWith('mxfile://') ||
+        url.startsWith('blob:') ||
+        url.startsWith(devUrl)
+      if (allowed) return
+      e.preventDefault()
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {})
+    })
+  }
   // webContents 引用必须在窗口存活时先取好:closed 触发时窗口已销毁,
   // 再访问 w.webContents 会抛 "Object has been destroyed"
   const wc = w.webContents
@@ -219,11 +240,20 @@ const pathKey = (p) => (CASE_SENSITIVE_FS ? p : p.toLowerCase())
 function isUnder(target, root) {
   const rel = path.relative(root, target)
   if (!rel) return true
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return false
+  // 大小写不敏感文件系统(Windows 默认、macOS 默认)上,大小写不同的词法路径指向同一目录:
+  // '/system/x' 必须按命中保护目录 '/System' 处理(linux 区分大小写,不做此放宽)
+  if (process.platform !== 'linux') {
+    const t = target.toLowerCase().replace(/[\\/]+$/, '')
+    const r = root.toLowerCase().replace(/[\\/]+$/, '')
+    if (t === r || t.startsWith(r + '/') || t.startsWith(r + '\\')) return true
+  }
   return true
 }
 
 let sensitiveCache = null
+/** Win32 保留设备名:任何段命中即拒绝 */
+const WIN_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
 function sensitiveDirs() {
   if (sensitiveCache) return sensitiveCache
   const list = []
@@ -260,7 +290,15 @@ function isSensitive(p) {
 function checkPath(p, write) {
   if (typeof p !== 'string' || !p.trim()) throw new Error('无效路径')
   if (p.includes('\0')) throw new Error('路径包含非法字符(NUL)')
+  // Windows 扩展长度前缀(\\?\C:\... 与 \\?\UNC\...)会绕过 isUnder 的词法比对,先还原成常规形式
+  if (/^\\\\\?\\/i.test(p)) p = p.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/i, '')
   const rp = path.resolve(p)
+  // Win32 会剥掉段尾的点/空格:'C:/x../y' 词法上不在 'C:/Windows' 下,实际命中的却是它;
+  // 保留设备名(CON/NUL/COM1…)同理。凡出现一律拒绝。
+  for (const seg of rp.split(/[\\/]+/)) {
+    if (!seg) continue
+    if (/[. ]$/.test(seg) || WIN_RESERVED_NAME.test(seg)) throw new Error(`路径包含非法段:${seg}`)
+  }
   if (isSensitive(rp)) {
     if (write) throw new Error(`拒绝修改受保护的系统位置:${rp}`)
     console.warn('[mx-fm] 读取系统敏感路径(已放行):', rp)
@@ -619,7 +657,30 @@ async function runOp(sender, id, payload) {
           if (!RENAME_FALLBACK.has(e.code)) throw e
         }
       }
-      if (mode === 'overwrite') await fsp.unlink(f.dst).catch(() => {})
+      if (mode === 'overwrite') {
+        // 先写临时名再换名覆盖:直接 unlink 后复制,中途失败/取消时原文件就没了
+        const tmp = `${f.dst}.mx-tmp-${id}-${i}`
+        try {
+          await streamCopy(op, f.src, tmp, (written) => {
+            sendProgress(sender, id, i, count, bytesDone + written, bytesTotal, name)
+          })
+          try {
+            await fsp.rename(tmp, f.dst)
+          } catch {
+            // 极少数场景不允许原子覆盖:退回先删后改名
+            await fsp.unlink(f.dst).catch(() => {})
+            await fsp.rename(tmp, f.dst)
+          }
+        } catch (e) {
+          await fsp.unlink(tmp).catch(() => {})
+          throw e
+        }
+        f.status = 'copied'
+        if (kind === 'move') await fsp.unlink(f.src).catch(() => {})
+        bytesDone += f.size
+        sendProgress(sender, id, i + 1, count, bytesDone, bytesTotal, name)
+        continue
+      }
       await streamCopy(op, f.src, f.dst, (written) => {
         sendProgress(sender, id, i, count, bytesDone + written, bytesTotal, name)
       })
@@ -1681,9 +1742,30 @@ async function spawnWinProgram(rp, args, cwd) {
 }
 
 /** Windows 批处理:必须经 cmd.exe 中转(start 是内建命令)。路径已单独引号包好,不拼接整条命令行 */
+/**
+ * bat/cmd 走 cmd.exe 且 verbatim 拼接:cmd 会对引号外的参数做完整解析,
+ * 含 & | < > ^ % 的参数就是命令注入通道。本应用 UI 从不传自定义参数,
+ * 但 exec:run 是暴露给渲染层的 IPC —— 含元字符的参数直接拒绝,空格参数配对引号。
+ */
+function sanitizeBatchArgs(args) {
+  if (!Array.isArray(args)) return []
+  const cleaned = []
+  for (const raw of args.map(String)) {
+    if (/[&|<>^"%]/.test(raw)) throw new Error('参数含 cmd 不允许的字符(& | < > ^ % ")')
+    cleaned.push(/[ \t]/.test(raw) ? `"${raw}"` : raw)
+  }
+  return cleaned
+}
+
 async function spawnWinBatch(rp, args, cwd) {
   const comspec = process.env.ComSpec || 'cmd.exe'
-  const r = await spawnExec(comspec, ['/d', '/s', '/c', `"${rp}"`, ...args], { cwd, windowsVerbatimArguments: true })
+  let safeArgs
+  try {
+    safeArgs = sanitizeBatchArgs(args)
+  } catch (e) {
+    return { mode: 'denied', reason: e.message }
+  }
+  const r = await spawnExec(comspec, ['/d', '/s', '/c', `"${rp}"`, ...safeArgs], { cwd, windowsVerbatimArguments: true })
   if (r.ok) return { mode: 'spawn', pid: r.pid }
   if (needsElevation(r.error)) return openBySystem(rp)
   return { mode: 'denied', reason: mapExecError(r.error) }

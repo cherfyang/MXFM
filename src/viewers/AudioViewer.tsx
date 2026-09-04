@@ -93,7 +93,8 @@ export function AudioViewer({ entry, nav }: ViewerProps) {
         <div
           className="mb-2 h-1.5 cursor-pointer rounded bg-panel2"
           onClick={(e) => {
-            const rect = (e.target as HTMLElement).getBoundingClientRect()
+            // currentTarget:内层已填充 div 也有命中面积,用 e.target 会取到部分宽度导致 seek 偏移
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
             const t = ((e.clientX - rect.left) / rect.width) * duration
             if (audioRef.current) audioRef.current.currentTime = t
           }}
