@@ -139,7 +139,7 @@ export function MarkdownViewer({ entry, readOnly, api }: ViewerProps) {
           {modeBtn('split', <Columns2 className="h-4 w-4" />, '分屏预览')}
           {modeBtn('preview', <Eye className="h-4 w-4" />, '仅预览')}
           <span className="flex-1" />
-          <span className="text-[11px] text-txt2">{doc.length} 字符</span>
+          <span className="text-[11px] text-txt2">{(previewSrc ?? doc ?? '').length} 字符</span>
         </div>
       )}
       <div className="flex min-h-0 flex-1">

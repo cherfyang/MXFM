@@ -150,6 +150,7 @@ export function TextViewer({ entry, readOnly, api }: ViewerProps) {
     let alive = true
     setDoc(null)
     setError(null)
+    setForceLoad(false) // 切文件时重置超限确认,每个大文件独立询问
     setOversize(null)
     ;(async () => {
       try {

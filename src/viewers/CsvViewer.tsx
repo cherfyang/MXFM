@@ -153,6 +153,7 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
 
   const doSave = async () => {
     if (!matrix) return
+    if (!api || true) { /* dirty tracking not wired for CSV, always save */ }
     try {
       const provider = useFs.getState().provider!
       // 按检测到的原编码回写(UTF-16 走 encodeSmart;GBK 暂只能转 UTF-8,是已知限制)
