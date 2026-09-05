@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   desktop:
-    name: 桌面版(${{ matrix.os }})
+    name: 桌面版(${{ matrix.os }}${{ matrix.arch && format(' / {0}', matrix.arch) || '' }})
     strategy:
       fail-fast: false
       matrix:
@@ -20,7 +20,10 @@ jobs:
             args: --win
             glob: release/*.exe
           - os: macos-latest
-            args: --mac
+            args: --mac --arm64
+            glob: release/*.dmg
+          - os: macos-13
+            args: --mac --x64
             glob: release/*.dmg
     runs-on: ${{ matrix.os }}
     steps:
@@ -43,7 +46,7 @@ jobs:
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-${{ matrix.os }}
+          name: desktop-${{ matrix.os }}${{ matrix.arch && format('-{0}', matrix.arch) || '' }}
           path: ${{ matrix.glob }}
           if-no-files-found: error
 

@@ -68,7 +68,7 @@ function looksLikeUtf16(bytes: Uint8Array): 'utf-16le' | 'utf-16be' | null {
   return null
 }
 
-/** 尝试 UTF-8 严格解码 → UTF-16(BOM/启发式) → GBK → 宽松 UTF-8 */
+/** 尝试 UTF-8 严格解码 → UTF-16(BOM/启发式) → Shift-JIS → EUC-KR → Big5 → GBK → 宽松 UTF-8 */
 export function decodeSmart(bytes: Uint8Array): { text: string; encoding: string } {
   // BOM 优先
   if (bytes.length >= 2) {
@@ -86,6 +86,15 @@ export function decodeSmart(bytes: Uint8Array): { text: string; encoding: string
         return { text: new TextDecoder(u16).decode(bytes), encoding: u16.toUpperCase().replace('-', '') }
       } catch {
         /* fallthrough */
+      }
+    }
+    // CJK 编码按特征排序:Shift-JIS/EUC-KR/Big5 结构较严格,放在宽泛的 GBK 之前,
+    // 避免日文/韩文/繁中文件被 GBK 误吞。都不匹配再试 GBK(简中最常见)。
+    for (const enc of ['shift-jis', 'euc-kr', 'big5']) {
+      try {
+        return { text: new TextDecoder(enc, { fatal: true }).decode(bytes), encoding: enc.toUpperCase() }
+      } catch {
+        /* 该编码不匹配,试下一个 */
       }
     }
     try {

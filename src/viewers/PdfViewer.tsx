@@ -12,9 +12,11 @@ export function PdfViewer({ entry }: ViewerProps) {
   const [numPages, setNumPages] = useState(0)
   const [page, setPage] = useState(1)
   const [scale, setScale] = useState(1.3)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'password'>('loading')
   const [errMsg, setErrMsg] = useState('')
+  const [password, setPassword] = useState('')
 
+  // 加载 PDF;密码错误时切到 password 态等用户输入后重试
   useEffect(() => {
     let alive = true
     setStatus('loading')
@@ -29,7 +31,7 @@ export function PdfViewer({ entry }: ViewerProps) {
         if (!provider) return
         const f = await provider.getFile(entry.path)
         const data = new Uint8Array(await f.arrayBuffer())
-        const doc = await pdfjs.getDocument({ data }).promise
+        const doc = await pdfjs.getDocument({ data, ...(password ? { password } : {}) }).promise
         if (!alive) {
           void doc.destroy()
           return
@@ -39,7 +41,11 @@ export function PdfViewer({ entry }: ViewerProps) {
         setPage(1)
         setStatus('ready')
       } catch (e) {
-        if (alive) {
+        if (!alive) return
+        if ((e as any).name === 'PasswordException') {
+          setStatus('password')
+          setErrMsg(password ? '密码错误,请重试' : '')
+        } else {
           setStatus('error')
           setErrMsg(e instanceof Error ? e.message : String(e))
         }
@@ -50,7 +56,7 @@ export function PdfViewer({ entry }: ViewerProps) {
       void docRef.current?.destroy()
       docRef.current = null
     }
-  }, [entry.path])
+  }, [entry.path, password])
 
   // 渲染当前页。快速翻页/缩放时:过期的 getPage 结果用 cancelled 丢弃;
   // 新渲染开始前取消上一个 render task,否则同一 canvas 双 render 会抛错被吞、静默显示错页
@@ -91,6 +97,15 @@ export function PdfViewer({ entry }: ViewerProps) {
     return (
       <div className="flex h-full items-center justify-center text-txt2">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 正在解析 PDF…
+      </div>
+    )
+  if (status === 'password')
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-txt2">
+        <AlertTriangle className="h-8 w-8 text-amber-500" />
+        <div className="text-sm">此 PDF 已加密,请输入密码</div>
+        {errMsg && <div className="text-xs text-danger">{errMsg}</div>}
+        <PasswordForm onUnlock={(pwd) => setPassword(pwd)} />
       </div>
     )
   if (status === 'error')
@@ -136,5 +151,30 @@ export function PdfViewer({ entry }: ViewerProps) {
         </div>
       </div>
     </div>
+  )
+}
+
+function PasswordForm({ onUnlock }: { onUnlock(pwd: string): void }) {
+  const [draft, setDraft] = useState('')
+  return (
+    <form
+      className="flex gap-2"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (draft) onUnlock(draft)
+      }}
+    >
+      <input
+        type="password"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder="PDF 密码"
+        className="h-8 w-48 rounded-md border border-brd bg-panel2 px-2.5 text-sm text-txt outline-none focus:border-acc"
+        autoFocus
+      />
+      <button type="submit" className="h-8 rounded-md bg-acc px-4 text-sm text-white hover:opacity-90">
+        打开
+      </button>
+    </form>
   )
 }
