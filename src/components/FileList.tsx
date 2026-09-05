@@ -87,6 +87,34 @@ export function FileList() {
   const sel = (tab && s.selection[tab.id]) || []
   const selSet = useMemo(() => new Set(sel), [sel])
 
+  // 键盘 ↑↓ 导航:移动单选,通过自定义事件通知虚拟列表滚动到可见位置
+  useEffect(() => {
+    if (!tab || st.viewMode !== 'details') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
+      const t = e.target as HTMLElement
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || t.closest('.cm-editor')) return
+      e.preventDefault()
+      const ordered = processEntries(listing?.entries ?? [], {
+        showHidden: st.showHidden, filter: tab.filter,
+        sortKey: st.sortKey, sortAsc: st.sortAsc, foldersFirst: st.foldersFirst,
+      })
+      if (!ordered.length) return
+      const curPath = sel[sel.length - 1]
+      const curIdx = ordered.findIndex((x) => x.path === curPath)
+      const nextIdx = e.key === 'ArrowDown'
+        ? Math.min(ordered.length - 1, Math.max(curIdx, -1) + 1)
+        : Math.max(0, curIdx <= 0 ? 0 : curIdx - 1)
+      if (nextIdx === curIdx) return
+      const next = ordered[nextIdx]
+      useFs.setState({ selection: { ...useFs.getState().selection, [tab.id]: [next.path] } })
+      window.dispatchEvent(new CustomEvent('mx-scroll-to-index', { detail: { index: nextIdx } }))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [tab, listing, sel, st.viewMode, st.showHidden, st.sortKey, st.sortAsc, st.foldersFirst, tab?.filter])
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const [containerW, setContainerW] = useState(800)
   const [dropping, setDropping] = useState(false)
@@ -431,6 +459,16 @@ function DetailsView({ entries, rowProps, scrollRef, containerCls, containerHand
     estimateSize: () => ROW_H,
     overscan: 14,
   })
+
+  // DetailsView:监听全局键盘导航事件,滚动到选中行
+  useEffect(() => {
+    const onScroll = (e: Event) => {
+      const idx = (e as CustomEvent).detail?.index
+      if (typeof idx === 'number') virt.scrollToIndex(idx, { align: 'auto' })
+    }
+    window.addEventListener('mx-scroll-to-index', onScroll)
+    return () => window.removeEventListener('mx-scroll-to-index', onScroll)
+  }, [virt])
 
   const sortBtn = (key: SortKey, label: string, width?: number) => (
     <button
