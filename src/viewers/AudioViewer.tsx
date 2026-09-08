@@ -124,7 +124,11 @@ export function AudioViewer({ entry, nav }: ViewerProps) {
           ) : (
             <button
               onClick={toggle}
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-acc text-white shadow hover:opacity-90"
+              // 解码失败且无转码能力(浏览器)时,播放键只会静默失败:禁用而不是死路
+              disabled={!!err}
+              className={`flex h-12 w-12 items-center justify-center rounded-full text-white shadow ${
+                err ? 'cursor-not-allowed bg-acc/40' : 'bg-acc hover:opacity-90'
+              }`}
               title="播放/暂停"
             >
               {playing ? <Pause className="h-6 w-6" /> : <Play className="ml-0.5 h-6 w-6" />}

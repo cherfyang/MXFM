@@ -83,7 +83,7 @@ function sniffDelim(text: string): string {
   return counts[0][1] > 0 ? counts[0][0] : ','
 }
 
-function serialize(rows: string[][], delim: string): string {
+function serialize(rows: string[][], delim: string, eol: string): string {
   return rows
     .map((row) =>
       row
@@ -95,7 +95,7 @@ function serialize(rows: string[][], delim: string): string {
         })
         .join(delim)
     )
-    .join('\n')
+    .join(eol)
 }
 
 export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
@@ -105,6 +105,7 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
   const [truncated, setTruncated] = useState(false)
   const [editing, setEditing] = useState<{ r: number; c: number } | null>(null)
   const delimRef = useRef(',')
+  const eolRef = useRef('\n')
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -124,6 +125,7 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
           const dec = decodeSmart(head)
           setEncoding(dec.encoding)
           const text = dec.text
+          eolRef.current = text.includes('\r\n') ? '\r\n' : '\n'
           const rows = parseCsv(text, sniffDelim(text)).slice(0, 30000)
           delimRef.current = sniffDelim(text)
           if (alive) {
@@ -136,6 +138,7 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
         const dec = decodeSmart(bytes)
         setEncoding(dec.encoding)
         const text = dec.text
+        eolRef.current = text.includes('\r\n') ? '\r\n' : '\n'
         const delim = sniffDelim(text)
         delimRef.current = delim
         const rows = parseCsv(text, delim)
@@ -153,14 +156,14 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
 
   const doSave = async () => {
     if (!matrix) return
-    if (!api || true) { /* dirty tracking not wired for CSV, always save */ }
     try {
       const provider = useFs.getState().provider!
+      const text = serialize(matrix, delimRef.current, eolRef.current)
       // 按检测到的原编码回写(UTF-16 走 encodeSmart;GBK 暂只能转 UTF-8,是已知限制)
       if (encoding === 'UTF-16LE' || encoding === 'UTF-16BE') {
-        await provider.writeBytes(entry.path, encodeSmart(serialize(matrix, delimRef.current), encoding))
+        await provider.writeBytes(entry.path, encodeSmart(text, encoding))
       } else {
-        await provider.writeText(entry.path, serialize(matrix, delimRef.current))
+        await provider.writeText(entry.path, text)
       }
       api.setDirty(false)
       useUi.getState().toast('CSV 已保存', 'success')
@@ -194,6 +197,8 @@ export function CsvViewer({ entry, readOnly, api }: ViewerProps) {
 
   const setCell = (r: number, c: number, v: string) => {
     if (!matrix) return
+    // 值没变就不动:blur 提交时未编辑过的单元格不再误标脏
+    if ((matrix[r]?.[c] ?? '') === v) return
     const next = matrix.map((row) => row.slice())
     while (next[r].length <= c) next[r].push('')
     next[r][c] = v

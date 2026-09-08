@@ -45,18 +45,29 @@ function LazyEditor({ url, entry, onClose }: { url: string; entry: import('../fs
       onSave={async (res: { imageBase64?: string; fullName?: string }) => {
         const dataUrl = res.imageBase64
         if (!dataUrl) return
-        const blob = await (await fetch(dataUrl)).blob()
-        const s = (await import('../stores/fs')).useFs.getState()
-        const provider = s.provider!
-        const dir = entry.path.slice(0, entry.path.length - entry.name.length - 1)
-        const base = entry.name.replace(/\.[^.]+$/, '')
-        const name = (await provider.exists(`${dir}/${base}-edited.png`))
-          ? await provider.uniqueName(dir, `${base}-edited.png`)
-          : `${base}-edited.png`
-        await provider.writeBlob(`${dir}/${name}`, blob)
-        ;(await import('../stores/ui')).useUi.getState().toast(`已保存为「${name}」`, 'success')
-        await s.refresh()
-        onClose()
+        try {
+          const blob = await (await fetch(dataUrl)).blob()
+          const s = (await import('../stores/fs')).useFs.getState()
+          const provider = s.provider!
+          // 根目录图片的 dir 是 '':不能拼出 '/xxx.png',要按无父目录处理
+          const noName = entry.path.slice(0, entry.path.length - entry.name.length)
+          const dir = noName.endsWith('/') ? noName.slice(0, -1) : noName
+          const base = entry.name.replace(/\.[^.]+$/, '')
+          const target = dir ? `${dir}/${base}-edited.png` : `${base}-edited.png`
+          const name = (await provider.exists(target))
+            ? await provider.uniqueName(dir, `${base}-edited.png`)
+            : `${base}-edited.png`
+          const finalPath = dir ? `${dir}/${name}` : name
+          await provider.writeBlob(finalPath, blob)
+          ;(await import('../stores/ui')).useUi.getState().toast(`已保存为「${name}」`, 'success')
+          await s.refresh()
+          onClose()
+        } catch (e) {
+          ;(await import('../stores/ui')).useUi.getState().toast(
+            `保存失败:${e instanceof Error ? e.message : String(e)}`,
+            'error'
+          )
+        }
       }}
     />
   )

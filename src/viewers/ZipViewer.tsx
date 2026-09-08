@@ -5,7 +5,7 @@ import { Archive, Download, Loader2, AlertTriangle, X, Folder, KeyRound } from '
 import type { ViewerProps } from './registry'
 import { useFs } from '../stores/fs'
 import { useUi } from '../stores/ui'
-import { fmtBytes, extOf } from '../utils/format'
+import { decodeSmart, fmtBytes, extOf } from '../utils/format'
 import { categoryOf } from '../utils/categories'
 import { EntryIcon } from '../components/Icons'
 import { baseName } from '../utils/path'
@@ -121,7 +121,16 @@ export function ZipViewer({ entry }: ViewerProps) {
         // zip 快速路径:先扫中央目录排掉加密包,未加密走 fflate;fflate 解不动再落 libarchive
         if (isZip && !zipHasEncrypted(bytes)) {
           try {
-            const files = unzipSync(bytes)
+            // zip bomb 防护:fflate 解压前能从中央目录拿到 originalSize,
+            // 单文件超 512MB 或累计超 1GB 的条目直接不解压(过滤后按不存在处理)
+            let totalOut = 0
+            const files = unzipSync(bytes, {
+              filter: (file) => {
+                if (file.originalSize > 512 * 1024 * 1024) return false
+                totalOut += file.originalSize
+                return totalOut <= 1024 * 1024 * 1024
+              },
+            })
             if (!alive) return
             setZipData(files)
             // fflate 按 UTF-8 强解文件名,含 U+FFFD 说明原名不是 UTF-8(如 GBK 打包),无法无损还原,给出提示
@@ -268,7 +277,10 @@ export function ZipViewer({ entry }: ViewerProps) {
       } else if (cat === 'binary') {
         setPreview({ path: item.path, text: `二进制文件,共 ${fmtBytes(blob.size)},不支持预览` })
       } else {
-        setPreview({ path: item.path, text: await blob.slice(0, 512 * 1024).text() })
+        // 用 decodeSmart 而非 blob.text():包内 GBK/UTF-16 文本条目不再乱码
+        const bytes = new Uint8Array(await blob.slice(0, 512 * 1024).arrayBuffer())
+        const { text } = decodeSmart(bytes)
+        setPreview({ path: item.path, text })
       }
     } catch (e) {
       if (encryptedRef.current && archRef.current) {

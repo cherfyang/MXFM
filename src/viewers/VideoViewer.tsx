@@ -133,6 +133,7 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
   const [err, setErr] = useState(false)
   const [controlsVisible, setControlsVisible] = useState(true)
   const hideTimer = useRef<number | null>(null)
+  const lastPosSlot = useRef(-1)
   const [overrideUrl, setOverrideUrl] = useState<string | null>(null)
   const [forcedTranscode, setForcedTranscode] = useState(false)
   // 外挂字幕:blob URL + 开关 + .ass 提示
@@ -258,6 +259,14 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
       if (!videoRef.current?.paused) setControlsVisible(false)
     }, 2600)
   }
+
+  // 卸载时清掉控制条隐藏定时器,防止对已卸载组件 setState
+  useEffect(
+    () => () => {
+      if (hideTimer.current) window.clearTimeout(hideTimer.current)
+    },
+    []
+  )
 
   const togglePlay = () => {
     const v = videoRef.current
@@ -405,9 +414,11 @@ export function VideoViewer({ entry, nav }: ViewerProps) {
           }}
           onTimeUpdate={(e) => {
             setTime(e.currentTarget.currentTime)
-            // 每 3 秒存一次进度
+            // 每 3 秒存一次进度:值没跨过 3 秒刻度就不写,避免同一秒内每次 timeupdate 都写 localStorage
             const t = e.currentTarget.currentTime
-            if (Math.floor(t) % 3 === 0) {
+            const slot = Math.floor(t / 3)
+            if (slot !== lastPosSlot.current) {
+              lastPosSlot.current = slot
               try {
                 localStorage.setItem(posKey, String(t))
               } catch {

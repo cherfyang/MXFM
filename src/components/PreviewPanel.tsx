@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { useSettings } from '../stores/settings'
 import type { FileEntry } from '../fs/types'
+import { categoryOf } from '../utils/categories'
 import { resolveCategory, ViewerHost } from '../viewers/registry'
 import type { Category } from '../utils/categories'
 
@@ -15,9 +16,11 @@ export function PreviewPanel() {
   const entry: FileEntry | null =
     sel.length === 1 ? (s.listings[tab!.id]?.entries ?? []).find((e) => e.path === sel[0]) ?? null : null
 
-  const [cat, setCat] = useState<Category>('binary')
+  // 初始就用扩展名分类:避免嗅探完成前闪一帧 HexViewer
+  const [cat, setCat] = useState<Category>(() => (entry ? categoryOf(entry) : 'binary'))
   useEffect(() => {
     if (!entry) return
+    setCat(categoryOf(entry))
     let alive = true
     resolveCategory(entry).then((c) => alive && setCat(c))
     return () => {
