@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { categoryOf, openWithCategoryOf } from '../utils/categories'
+import { categoryOf, openWithCategoryOf, type Category } from '../utils/categories'
 
 export type ViewMode = 'details' | 'grid'
 export type SortKey = 'name' | 'size' | 'type' | 'modified'
@@ -9,9 +9,10 @@ export type ExecRunPolicy = 'alwaysAsk' | 'askUntrusted' | 'never'
 export type ExecAppBundleDoubleClick = 'viewer' | 'run'
 export type ExecScriptDefault = 'view' | 'run'
 
-/** 某种扩展名/类型对应的默认打开目标 */
+/** 某种扩展名/类型对应的默认打开目标。
+ *  internal 可带 cat:强制以内置查看器的某个分类打开(如把未知文件按文本/十六进制看) */
 export type OpenWithTarget =
-  | { kind: 'internal' }
+  | { kind: 'internal'; cat?: Category }
   | { kind: 'system' }
   | { kind: 'app'; appPath: string; appName?: string }
 
@@ -50,6 +51,9 @@ interface SettingsState {
   singleClickOpen: boolean
   sidebarVisible: boolean
   previewVisible: boolean
+  // ---- 编辑器 ----
+  /** 内置 Vim 模式:文本/代码/Markdown 编辑器启用 Vim 键位(普通/插入模式) */
+  editorVim: boolean
   // ---- 可执行程序 ----
   /** 运行前确认策略:alwaysAsk=每次确认 askUntrusted=仅未记住的程序确认 never=不确认(不推荐) */
   execRunPolicy: ExecRunPolicy
@@ -68,7 +72,7 @@ interface SettingsState {
   /** 按"大类"(视频/图片/音频等)设置默认打开方式:key=OPEN_WITH_CATEGORIES 的 id;优先级低于扩展名配置 */
   openWithCategory: Record<string, OpenWithTarget>
   set<K extends keyof SettingsState>(key: K, value: SettingsState[K]): void
-  toggle(key: 'viewMode' | 'foldersFirst' | 'showHidden' | 'singleClickOpen' | 'sidebarVisible' | 'previewVisible' | 'showCheckerboard'): void
+  toggle(key: 'viewMode' | 'foldersFirst' | 'showHidden' | 'singleClickOpen' | 'sidebarVisible' | 'previewVisible' | 'showCheckerboard' | 'editorVim'): void
   /** 设置/取消某个扩展名的默认打开方式;target=null 表示删除(回退到内置) */
   setOpenWith(ext: string, target: OpenWithTarget | null): void
   /** 设置/取消某个大类的默认打开方式;target=null 表示删除(回退到扩展名配置或内置) */
@@ -91,6 +95,7 @@ export const useSettings = create<SettingsState>()(
       singleClickOpen: true,
       sidebarVisible: true,
       previewVisible: false,
+      editorVim: false,
       execRunPolicy: 'askUntrusted',
       execAppBundleDoubleClick: 'viewer',
       execScriptDefault: 'view',

@@ -158,10 +158,9 @@ export default function App() {
       const single = sel.length === 1 ? ordered.find((x) => x.path === sel[0]) : undefined
 
       if (mod && e.key.toLowerCase() === 's') {
-        if (tab.view?.dirty) {
-          e.preventDefault()
-          void s.saveView()
-        }
+        // 一律吞掉:未脏时也不能放行,否则浏览器弹出「保存页面」对话框
+        e.preventDefault()
+        if (tab.view?.dirty) void s.saveView()
         return
       }
       // 重做:Ctrl/Cmd+Shift+Z,Windows 另支持 Ctrl+Y(编辑态由 CodeMirror 自行处理)
@@ -372,7 +371,7 @@ export default function App() {
         <main className="flex min-w-0 flex-1 flex-col">
           <TabsBar />
           {tab?.view ? (
-            <ViewerHost entry={tab.view.entry} category={tab.view.category} />
+            <ViewerHost entry={tab.view.entry} category={tab.view.category} forcedCategory={tab.view.forceCat} />
           ) : tab && tab.history[tab.idx] === HOME_PATH ? (
             <HomePage />
           ) : showWelcome ? (

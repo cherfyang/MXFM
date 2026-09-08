@@ -91,9 +91,15 @@ export function MarkdownViewer({ entry, readOnly, api }: ViewerProps) {
   })
 
   const doSave = async () => {
+    if (readOnly) return
+    const provider = useFs.getState().provider
+    if (!provider) return
+    // 零修改跳过:与 TextViewer 对齐,避免无意义重写
+    if (doc !== null && getTextRef.current() === savedRef.current) {
+      api.setDirty(false)
+      return
+    }
     try {
-      const provider = useFs.getState().provider
-      if (!provider) return
       await provider.writeText(entry.path, getTextRef.current())
       savedRef.current = getTextRef.current()
       api.setDirty(false)

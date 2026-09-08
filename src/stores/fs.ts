@@ -24,6 +24,8 @@ export interface ViewedFile {
   entry: FileEntry
   category: Category
   dirty: boolean
+  /** 「打开方式」强制以内置查看器的某分类打开(文本/十六进制);与 category 不同时查看器只读 */
+  forceCat?: Category
 }
 
 /** 本轮主进程新增的能力(preload 已暴露),与 ElectronProvider 共用同一个 window.mxAPI 对象 */
@@ -138,7 +140,7 @@ interface FsState {
   refresh(tabId?: string): Promise<void>
   setFilter(text: string): void
 
-  openEntry(entry: FileEntry, opts?: { forceView?: boolean }): void
+  openEntry(entry: FileEntry, opts?: { forceView?: boolean; forceCat?: Category }): void
   closeView(): void
   requestCloseView(): void
   setDirty(dirty: boolean): void
@@ -919,8 +921,12 @@ export const useFs = create<FsState>()((set, get) => {
         return
       }
       const category = entryCat
+      // 「打开方式」强制分类:一次性参数优先,其次是持久化的 internal+cat 默认
+      const forceCat =
+        opts?.forceCat ??
+        (target.kind === 'internal' && target.cat ? (target.cat as Category) : undefined)
       const tabs = s.tabs.map((t) =>
-        t.id === tab.id ? { ...t, view: { entry, category, dirty: false } } : t
+        t.id === tab.id ? { ...t, view: { entry, category, dirty: false, forceCat } } : t
       )
       set({ tabs })
       persistSession(tabs, s.activeId)
@@ -964,7 +970,12 @@ export const useFs = create<FsState>()((set, get) => {
     },
 
     async saveView() {
-      if (saveFn) await saveFn()
+      // 查看器处于错误/超限等状态时没有注册保存函数:给用户反馈而不是静默无效
+      if (!saveFn) {
+        useUi.getState().toast('当前查看器状态不支持保存', 'info')
+        return
+      }
+      await saveFn()
     },
 
     clickSelect(entry, index, ordered, e) {
@@ -1643,26 +1654,36 @@ async function launchEntry(entry: FileEntry, args?: string[]) {
   }
 }
 
-/** 构造单个文件的「打开方式」子菜单;会同时修改该扩展名的默认设置 */
+/** 构造单个文件的「打开方式」子菜单;会同时修改该扩展名的默认设置。
+ *  浏览器版没有 system/app 两个去向,但仍提供内置查看器与强制文本/十六进制。 */
 function buildOpenWithMenuItems(entry: FileEntry): MenuItem[] {
   const s = useFs.getState()
-  if (s.provider?.kind !== 'native' || entry.kind !== 'file') return []
+  if (entry.kind !== 'file') return []
   const st = useSettings.getState()
+  const native = s.provider?.kind === 'native'
+  const provider = native ? (s.provider as ElectronProvider) : null
   const ext = extOf(entry.name)
   const target = st.getOpenWith(ext)
-  const check = (kind: string) => (target.kind === kind ? '✓ ' : '')
-  const provider = s.provider as ElectronProvider
+  const check = (kind: string, cat?: Category) =>
+    target.kind === kind && (target.kind !== 'internal' || target.cat === cat) ? '✓ ' : ''
+  const applyInternal = async (cat?: Category) => {
+    st.setOpenWith(ext, cat ? { kind: 'internal', cat } : { kind: 'internal' })
+    s.openEntry(entry, cat ? { forceView: true, forceCat: cat } : { forceView: true })
+  }
+  const items: MenuItem[] = [
+    { label: `${check('internal', undefined)}内置查看器`, onClick: () => void applyInternal() },
+    { label: `${check('internal', 'text')}文本方式打开`, onClick: () => void applyInternal('text') },
+    { label: `${check('internal', 'binary')}十六进制查看`, onClick: () => void applyInternal('binary') },
+  ]
+  if (!native) return items
   const apply = async (t: import('./settings').OpenWithTarget) => {
     try {
-      if (t.kind === 'internal') {
-        st.setOpenWith(ext, { kind: 'internal' })
-        s.openEntry(entry, { forceView: true })
-      } else if (t.kind === 'system') {
-        st.setOpenWith(ext, { kind: 'system' })
-        await provider.openInSystem!(entry.path)
+      if (t.kind === 'system') {
+        st.setOpenWith(ext, t)
+        await provider!.openInSystem!(entry.path)
       } else if (t.kind === 'app') {
         st.setOpenWith(ext, t)
-        await provider.openWithApp!(entry.path, t.appPath)
+        await provider!.openWithApp!(entry.path, t.appPath)
       }
     } catch (e) {
       useUi.getState().toast(String((e as Error).message || e), 'error')
@@ -1670,7 +1691,7 @@ function buildOpenWithMenuItems(entry: FileEntry): MenuItem[] {
   }
   const pickOther = async () => {
     try {
-      const appPath = await provider.pickOpenWithApp!()
+      const appPath = await provider!.pickOpenWithApp!()
       if (!appPath) return
       const appName = appPath.replace(/\\/g, '/').split('/').pop() || appPath
       await apply({ kind: 'app', appPath, appName })
@@ -1678,22 +1699,17 @@ function buildOpenWithMenuItems(entry: FileEntry): MenuItem[] {
       useUi.getState().toast(String((e as Error).message || e), 'error')
     }
   }
-  return [
+  items.push(
+    { label: `${check('system')}系统默认应用`, onClick: () => void apply({ kind: 'system' }) },
+    { label: '其他应用...', onClick: () => void pickOther() },
+    { sep: true },
     {
-      label: '打开方式',
-      children: [
-        { label: `${check('internal')}内置查看器`, onClick: () => void apply({ kind: 'internal' }) },
-        { label: `${check('system')}系统默认应用`, onClick: () => void apply({ kind: 'system' }) },
-        { label: '其他应用...', onClick: () => void pickOther() },
-        { sep: true },
-        {
-          label: '重置为内置查看器',
-          disabled: target.kind === 'internal',
-          onClick: () => st.setOpenWith(ext, { kind: 'internal' }),
-        },
-      ],
-    },
-  ]
+      label: '重置为内置查看器',
+      disabled: target.kind === 'internal' && !('cat' in target && target.cat),
+      onClick: () => st.setOpenWith(ext, { kind: 'internal' }),
+    }
+  )
+  return items
 }
 
 /** 供 FileList 的右键菜单使用:基于当前选择构造通用操作项 */
@@ -1736,7 +1752,6 @@ export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
     onClick: () => s.deleteSelection(),
   })
   if (isNative && single) {
-    items.push({ sep: true })
     items.push({
       label: plat === 'darwin' ? '在 Finder 中显示' : '在资源管理器中显示',
       onClick: () => {
@@ -1744,12 +1759,14 @@ export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
         p.reveal(sel[0].path).catch((e) => useUi.getState().toast(String(e.message || e), 'error'))
       },
     })
-    if (sel[0].kind === 'file') {
-      items.push(...buildOpenWithMenuItems(sel[0]))
-    }
     if (nativeExtras()) {
       items.push({ label: '在终端打开', onClick: openTerminalHere })
     }
+  }
+  // 打开方式:全环境可用(浏览器版提供内置/文本/十六进制,桌面版另有系统默认与指定应用)
+  if (single && sel[0].kind === 'file') {
+    const ow = buildOpenWithMenuItems(sel[0])
+    if (ow.length) items.push({ label: '打开方式', children: ow })
   }
   return items
 }

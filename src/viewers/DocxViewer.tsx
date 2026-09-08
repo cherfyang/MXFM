@@ -3,6 +3,10 @@ import { renderAsync } from 'docx-preview'
 import { Loader2, AlertTriangle } from 'lucide-react'
 import type { ViewerProps } from './registry'
 import { useFs } from '../stores/fs'
+import { fmtBytes } from '../utils/format'
+
+/** docx-preview 全量渲染进 DOM:给个上限,避免超大文档冻结标签页 */
+const DOCX_SIZE_LIMIT = 50 * 1024 * 1024
 
 export function DocxViewer({ entry }: ViewerProps) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -19,6 +23,13 @@ export function DocxViewer({ entry }: ViewerProps) {
         const provider = useFs.getState().provider
         if (!provider) return
         const f = await provider.getFile(entry.path)
+        if (f.size > DOCX_SIZE_LIMIT) {
+          if (alive && runId === renderRunRef.current) {
+            setStatus('error')
+            setErrMsg(`文件较大(${fmtBytes(f.size)}),超出内置预览上限 ${fmtBytes(DOCX_SIZE_LIMIT)}`)
+          }
+          return
+        }
         const buf = await f.arrayBuffer()
         if (!alive || !hostRef.current) return
         hostRef.current.innerHTML = ''

@@ -72,6 +72,7 @@ export function useCodeEditor(opts: {
   const hostRef = useRef<HTMLDivElement>(null)
   const onChangeRef = useRef(opts.onChange)
   const onSaveRef = useRef(opts.onSave)
+  const editorVim = useSettings((s) => s.editorVim)
   onChangeRef.current = opts.onChange
   onSaveRef.current = opts.onSave
 
@@ -109,19 +110,33 @@ export function useCodeEditor(opts: {
       ]
       if (lang) extensions.push(lang)
       if (themeMeta(useSettings.getState().theme).dark) extensions.push(oneDark)
+      // 内置 Vim 模式:设置里开启后对可编辑查看器生效(懒加载,不进首包)
+      if (!readOnly && editorVim) {
+        try {
+          const { vim } = await import('@replit/codemirror-vim')
+          extensions.unshift(vim())
+        } catch {
+          /* 包不可用时退回普通编辑 */
+        }
+      }
       view = new EditorView({
         state: EditorState.create({ doc, extensions }),
         parent: hostRef.current,
       })
-      // 编辑器内 Esc 退出查看器(CM 自己处理的 Esc 已 preventDefault,此处跳过)
-      const onEsc = (e: KeyboardEvent) => {
-        if (e.key !== 'Escape' || e.defaultPrevented) return
-        e.stopPropagation()
-        useFs.getState().requestCloseView()
+      // 打开文件即聚焦编辑器:否则键入会落到全局快捷键上,看起来像「不能编辑」
+      if (!readOnly) view.focus()
+      // 编辑器内 Esc 退出查看器(CM 自己处理的 Esc 已 preventDefault,此处跳过)。
+      // Vim 模式下 Esc 是模式切换键:仅在插入态由 vim 拦截,普通态不绑定退出查看器
+      if (!editorVim) {
+        const onEsc = (e: KeyboardEvent) => {
+          if (e.key !== 'Escape' || e.defaultPrevented) return
+          e.stopPropagation()
+          useFs.getState().requestCloseView()
+        }
+        hostRef.current?.addEventListener('keydown', onEsc)
+        const offEsc = () => hostRef.current?.removeEventListener('keydown', onEsc)
+        ;(view as unknown as { __offEsc: () => void }).__offEsc = offEsc
       }
-      hostRef.current?.addEventListener('keydown', onEsc)
-      const offEsc = () => hostRef.current?.removeEventListener('keydown', onEsc)
-      ;(view as unknown as { __offEsc: () => void }).__offEsc = offEsc
     })()
     return () => {
       cancelled = true
@@ -131,7 +146,7 @@ export function useCodeEditor(opts: {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, ext, readOnly])
+  }, [doc, ext, readOnly, editorVim])
 
   return hostRef
 }
@@ -198,6 +213,11 @@ export function TextViewer({ entry, readOnly, api }: ViewerProps) {
   const doSave = async () => {
     // 只读模式(嵌入预览/强制加载)不允许写盘:即使没有修改也会重写文件(丢 BOM/转编码)
     if (readOnly) return
+    // 零修改时跳过写盘:重写会悄悄丢 BOM/转换编码
+    if (doc !== null && getTextRef.current() === savedTextRef.current) {
+      api.setDirty(false)
+      return
+    }
     try {
       const provider = useFs.getState().provider
       if (!provider) return

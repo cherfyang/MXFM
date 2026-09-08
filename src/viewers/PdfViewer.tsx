@@ -3,6 +3,10 @@ import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, AlertTriangle } fr
 import type { ViewerProps } from './registry'
 import { useFs } from '../stores/fs'
 import { IconBtn } from '../components/ui'
+import { fmtBytes } from '../utils/format'
+
+/** PDF 全量 arrayBuffer 进内存的上限:超出给明确报错而不是冻结标签页 */
+const PDF_SIZE_LIMIT = 100 * 1024 * 1024
 
 export function PdfViewer({ entry }: ViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -30,6 +34,14 @@ export function PdfViewer({ entry }: ViewerProps) {
         const provider = useFs.getState().provider
         if (!provider) return
         const f = await provider.getFile(entry.path)
+        // arrayBuffer 全量进内存:给个上限,避免超大 PDF 冻结标签页
+        if (f.size > PDF_SIZE_LIMIT) {
+          if (alive) {
+            setStatus('error')
+            setErrMsg(`文件较大(${fmtBytes(f.size)}),超出内置预览上限 ${fmtBytes(PDF_SIZE_LIMIT)}`)
+          }
+          return
+        }
         const data = new Uint8Array(await f.arrayBuffer())
         const doc = await pdfjs.getDocument({ data, ...(password ? { password } : {}) }).promise
         if (!alive) {

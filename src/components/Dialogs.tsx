@@ -616,7 +616,10 @@ function OpenWithDialog() {
           </div>
           <div className="flex items-center gap-2">
             <Btn onClick={() => addByExt({ kind: 'internal' })}>添加为内置</Btn>
-            <Btn onClick={() => addByExt({ kind: 'system' })}>添加为系统默认</Btn>
+            {/* 浏览器版没有系统默认程序:不给配置,否则之后每次打开都报错 */}
+            <Btn onClick={() => addByExt({ kind: 'system' })} disabled={!canPick}>
+              添加为系统默认
+            </Btn>
             <Btn onClick={() => addByExt({ kind: 'app', appPath: '', appName: '' })} disabled={!canPick}>
               添加为其他应用
             </Btn>

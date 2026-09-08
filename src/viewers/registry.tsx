@@ -105,11 +105,14 @@ const CAT_LABEL: Record<Category, string> = {
 function UnsupportedViewer({ entry }: ViewerProps) {
   const s = useFs()
   const native = s.provider?.kind === 'native'
+  const isPpt = categoryOf(entry) === 'ppt'
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 text-txt2">
-      <div className="text-sm">{CAT_LABEL['legacy']}暂不支持内置预览</div>
+      <div className="text-sm">{isPpt ? 'PPTX 暂不支持内置预览' : `${CAT_LABEL['legacy']}暂不支持内置预览`}</div>
       <div className="max-w-sm text-center text-xs leading-relaxed opacity-70">
-        旧版二进制 Office 格式(.doc / .ppt 等)需要借助本机 Office / WPS 才能渲染
+        {isPpt
+          ? 'PowerPoint 演示文稿(.pptx)的内置渲染尚未实现,可借助本机 Office / WPS 打开'
+          : '旧版二进制 Office 格式(.doc / .ppt 等)需要借助本机 Office / WPS 才能渲染'}
       </div>
       {native && (
         <button
@@ -132,25 +135,30 @@ export function ViewerHost({
   category: catProp,
   readOnly = false,
   embedded = false,
+  forcedCategory,
   onBack,
 }: {
   entry: FileEntry
   category: Category
   readOnly?: boolean
   embedded?: boolean
+  /** 「打开方式」强制以内置查看器的某分类打开(文本/十六进制) */
+  forcedCategory?: Category
   onBack?(): void
 }) {
   const s = useFs()
-  const [cat, setCat] = useState<Category>(catProp)
+  // natural=null 表示嗅探未完成:改扩展名的文本文件此时不要先挂 HexViewer(白读 64KB 且闪屏)
+  const [natural, setNatural] = useState<Category | null>(null)
   useEffect(() => {
     let alive = true
     resolveCategory(entry).then((c) => {
-      if (alive) setCat(c)
+      if (alive) setNatural(c)
     })
     return () => {
       alive = false
     }
   }, [entry.path, entry.kind, entry.ext])
+  const cat = forcedCategory ?? natural ?? catProp
 
   // 同类文件前后导航
   const nav: NavInfo | undefined = useMemo(() => {
@@ -175,7 +183,11 @@ export function ViewerHost({
   }, [entry.path, cat, embedded, s.tabs, s.listings, s.activeId])
 
   const Comp = VIEWERS[cat] ?? HexViewer
-  const editable = !readOnly && EDITABLE_CATEGORIES.has(cat)
+  // 强制分类与真实分类不符(比如把二进制按文本打开):只读,防止把有损解码结果写回去
+  const forcedMismatch = forcedCategory != null && forcedCategory !== natural
+  const editable = !readOnly && !forcedMismatch && EDITABLE_CATEGORIES.has(cat)
+  // 扩展名判为二进制的文件:嗅探完成前先不挂查看器(否则 HexViewer 白读 64KB 再闪切)
+  const pending = forcedCategory == null && catProp === 'binary' && natural === null
 
   const api: ViewerApi = useMemo(
     () => ({
@@ -238,7 +250,13 @@ export function ViewerHost({
             </div>
           }
         >
-          <Comp entry={entry} readOnly={readOnly || !editable} api={api} nav={nav} />
+          {pending ? (
+            <div className="flex h-full items-center justify-center text-txt2">
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 识别文件类型…
+            </div>
+          ) : (
+            <Comp entry={entry} readOnly={readOnly || !editable} api={api} nav={nav} />
+          )}
         </Suspense>
       </div>
     </div>
@@ -287,11 +305,13 @@ export function useBlobUrl(entry: FileEntry | null): string | null {
         const blob = await decodeImageFile(f)
         u = URL.createObjectURL(blob)
         if (alive) setUrl(u)
+        // cleanup 已跑过而异步才完成:立即回收,否则每个晚到的结果泄漏一份完整媒体
+        else URL.revokeObjectURL(u)
       } catch (e) {
         if (alive) {
           setUrl(null)
           import('../stores/ui').then(({ useUi }) =>
-            useUi.getState().toast((e as Error).message || '图片解码失败', 'error')
+            useUi.getState().toast((e as Error).message || '媒体解码失败', 'error')
           )
         }
       }

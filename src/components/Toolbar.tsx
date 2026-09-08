@@ -28,6 +28,7 @@ import {
   Grid3x3,
   AppWindow,
   ArrowUpDown,
+  Keyboard,
 } from 'lucide-react'
 import { useFs } from '../stores/fs'
 import { useSearch, type SearchResultItem } from '../stores/search'
@@ -565,6 +566,11 @@ export function openMoreMenu(x?: number, y?: number) {
       label: `透明背景棋盘格:${st.showCheckerboard ? '开' : '关'}`,
       icon: <Grid3x3 className="h-4 w-4" />,
       onClick: () => useSettings.getState().toggle('showCheckerboard'),
+    },
+    {
+      label: `Vim 编辑模式:${st.editorVim ? '开' : '关'}`,
+      icon: <Keyboard className="h-4 w-4" />,
+      onClick: () => useSettings.getState().toggle('editorVim'),
     },
     { sep: true },
     ...themeItems,
