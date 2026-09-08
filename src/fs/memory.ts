@@ -399,12 +399,21 @@ export async function buildDemoRoot(): Promise<MemNode> {
   const root = newDir('演示项目')
   const xlsxBytes = await makeXlsx()
 
+  // GBK 字节级硬编码(浏览器没有 GBK 编码器):演示文本查看器的编码自动识别
+  const GBK_SAMPLE = new Uint8Array([
+    ...new TextEncoder().encode('MX File Manager\r\n'),
+    0xb2, 0xe2, 0xca, 0xd4, 0xce, 0xc4, 0xb5, 0xb5, 0x0d, 0x0a, // 测试文档
+    0xd6, 0xd0, 0xb9, 0xfa, 0xc8, 0xcb, 0xc3, 0xf1, 0x0d, 0x0a, // 中国人民
+    0xb1, 0xe0, 0xc2, 0xeb, 0xbc, 0xec, 0xb2, 0xe2, 0x0d, 0x0a, // 编码检测
+  ])
+
   const docs = newDir('文档')
   docs.children!.set('README.md', newFile('README.md', README_MD))
   docs.children!.set('会议纪要.txt', newFile('会议纪要.txt', '项目周会纪要\n\n时间:2026-08-28 10:00\n\n一、本周进展\n1. 文件浏览核心完成\n2. 内置查看器覆盖 12 类格式\n\n二、下周计划\n1. 性能优化(虚拟滚动压测)\n2. 首次引导页\n\n三、风险\n无。'))
   docs.children!.set('数据.csv', newFile('数据.csv', makeCsv(80)))
   docs.children!.set('预算表.xlsx', newFile('预算表.xlsx', xlsxBytes))
   docs.children!.set('项目介绍.docx', newFile('项目介绍.docx', makeDocx()))
+  docs.children!.set('GBK编码示例.txt', newFile('GBK编码示例.txt', GBK_SAMPLE))
   root.children!.set('文档', docs)
 
   const code = newDir('代码')

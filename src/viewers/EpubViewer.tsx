@@ -51,7 +51,8 @@ export function EpubViewer({ entry }: ViewerProps) {
       }
       rendRef.current = null
     }
-  }, [url])
+    // loadFailed 必须在依赖里:文件读取失败时 url 恒为 null,少了它失败分支永远不执行(卡「打开中」)
+  }, [url, loadFailed])
 
   const flip = (d: number) => {
     if (d < 0) rendRef.current?.prev()

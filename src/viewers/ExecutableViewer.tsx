@@ -8,6 +8,7 @@ import {
   BadgeCheck,
   Globe,
   TerminalSquare,
+  AppWindow,
 } from 'lucide-react'
 import type { ViewerProps } from './registry'
 import { useFs } from '../stores/fs'
@@ -162,9 +163,14 @@ export function ExecutableViewer({ entry }: ViewerProps) {
       <div className="flex flex-col items-center gap-2">
         {icon ? (
           <img src={icon} alt="" className="h-16 w-16 rounded-xl" />
-        ) : (
+        ) : isNative ? (
           <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-panel2">
             <Loader2 className="h-6 w-6 animate-spin text-txt2" />
+          </div>
+        ) : (
+          // 浏览器版没有图标提取能力:直接给通用图标,不能挂永久转圈
+          <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-panel2">
+            <AppWindow className="h-6 w-6 text-txt2" />
           </div>
         )}
         <div className="text-base font-semibold">{entry.name}</div>
