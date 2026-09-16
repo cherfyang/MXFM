@@ -1744,6 +1744,42 @@ export function buildEntryMenuItems(sel: FileEntry[]): MenuItem[] {
   }
   items.push({ label: '复制', disabled: !sel.length, onClick: () => s.copySelection(sel) })
   items.push({ label: '剪切', disabled: !sel.length, onClick: () => s.cutSelection(sel) })
+  // 复制路径:完整路径 / 相对当前文件夹的路径(多选时逐行拼接)
+  if (sel.length) {
+    const tab = s.tabs.find((t) => t.id === s.activeId)
+    const dir = tab ? tab.history[tab.idx] ?? '' : ''
+    const relOf = (p: string) => {
+      if (!dir) return p
+      const d = dir.endsWith('/') ? dir : dir + '/'
+      if (p === dir) return '.'
+      return p.startsWith(d) ? p.slice(d.length) : p
+    }
+    const copyText = (text: string) => {
+      navigator.clipboard
+        ?.writeText(text)
+        .catch(() => {
+          const ta = document.createElement('textarea')
+          ta.value = text
+          ta.style.position = 'fixed'
+          ta.style.opacity = '0'
+          document.body.appendChild(ta)
+          ta.select()
+          document.execCommand('copy')
+          ta.remove()
+        })
+        .finally(() => useUi.getState().toast('路径已复制', 'success'))
+    }
+    items.push({
+      label: '复制完整路径',
+      disabled: !sel.length,
+      onClick: () => copyText(sel.map((e) => e.path).join('\r\n')),
+    })
+    items.push({
+      label: '复制相对路径',
+      disabled: !sel.length,
+      onClick: () => copyText(sel.map((e) => relOf(e.path)).join('\r\n')),
+    })
+  }
   if (single) items.push({ label: '重命名 (F2)', onClick: () => s.startRename(sel[0].path) })
   items.push({
     label: sel.length > 1 ? `删除 ${sel.length} 项` : '删除',
